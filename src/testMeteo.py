@@ -2,7 +2,7 @@ import pandas as pd
 import requests
 
 #Load clean dataset with disasters and their dates
-df = pd.read_csv("disastri_per_satellite.csv")
+df = pd.read_csv("../results/disastri_per_satellite.csv")
 
 #Select the first row of the dataset to test the API call
 riga = df.iloc[0]

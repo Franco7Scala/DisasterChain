@@ -4,7 +4,7 @@ import time
 import json
 
 #Load the dataset with disasters and their dates
-df_disastri = pd.read_csv("disastri_per_satellite.csv")
+df_disastri = pd.read_csv("../results/disastri_per_satellite.csv")
 
 #Select the first 500 rows of the dataset for testing
 #To use the entire dataset, simply comment out the following line
@@ -84,7 +84,7 @@ for indice, riga in enumerate(df_test.itertuples()):
     time.sleep(0.1)
 
 #Save the total weather data for all disasters in a JSON file for later use in merging with the disaster dataset
-with open("dataset_meteo_giornaliero_test.json", "w") as f:
+with open("../results/dataset_meteo_giornaliero_test.json", "w") as f:
     json.dump(dati_meteo_totali, f)
 
 print("\n---OPERAZIONE COMPLETATA---")
