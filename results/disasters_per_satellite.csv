@@ -1,4 +1,4 @@
-disasterno,Disaster Type,latitude,longitude,Data_Inizio,Data_Meno_10,Data_Piu_10
+disasterno,disaster_type,latitude,longitude,start_date,date_minus_10,date_plus_10
 2018-0040,Flood,-22.19491892,-42.66135386,2018-02-14,2018-02-04,2018-02-24
 2000-0620,Flood,6.526077403,3.553893496,2000-09-20,2000-09-10,2000-09-30
 2000-0008,Volcanic activity,14.34601258,-90.64447442,2000-01-16,2000-01-06,2000-01-26
