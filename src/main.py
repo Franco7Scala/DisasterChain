@@ -7,6 +7,9 @@ from support.utils import merge_and_clean_datasets, load_checkpoint, save_checkp
 
 def main():
     print("--- STARTING ENVIRONMENTAL CAUSAL DATASET PIPELINE ---")
+
+    # Ensure that the data directory exists before attempting to read input files
+    os.makedirs(os.path.dirname(EMDAT_INPUT_PATH), exist_ok=True)
     
     #Cleaning and merging the original datasets to create a unified structure with all necessary information for the next steps of the pipeline. This step ensures that we have a clean and consistent dataset to work with for the weather data extraction.
     print("Step 1: Merging and cleaning source datasets...")
