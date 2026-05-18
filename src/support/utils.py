@@ -65,3 +65,33 @@ def save_checkpoint(data, file_path):
     """
     with open(file_path, 'w', encoding='utf-8') as f:
         json.dump(data, f, indent=4)
+
+def calculate_weather_summaries(daily_series):
+    """
+    Splits the 21-day daily weather series into pre-event (first 10 days)
+    and post-event (last 10 days) periods, calculating statistical aggregates.
+    """
+    if not daily_series:
+        return None, None
+
+    # Slicing the arrays: Pre-event (indices 0-9), Post-event (indices 11-20)
+    pre_rain = daily_series["rain_sum"][:10]
+    post_rain = daily_series["rain_sum"][11:]
+    
+    pre_temp_max = daily_series["temperature_2m_max"][:10]
+    post_temp_max = daily_series["temperature_2m_max"][11:]
+
+    # Calculating aggregates
+    pre_summary = {
+        "total_rainfall_mm": round(sum(pre_rain), 2),
+        "max_daily_rainfall_mm": max(pre_rain) if pre_rain else 0.0,
+        "avg_max_temperature_c": round(sum(pre_temp_max) / len(pre_temp_max), 1) if pre_temp_max else None
+    }
+
+    post_summary = {
+        "total_rainfall_mm": round(sum(post_rain), 2),
+        "max_daily_rainfall_mm": max(post_rain) if post_rain else 0.0,
+        "avg_max_temperature_c": round(sum(post_temp_max) / len(post_temp_max), 1) if post_temp_max else None
+    }
+
+    return pre_summary, post_summary

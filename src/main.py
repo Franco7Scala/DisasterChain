@@ -3,7 +3,7 @@ import requests
 import time
 import os
 from support.constants import *
-from support.utils import merge_and_clean_datasets, load_checkpoint, save_checkpoint
+from support.utils import merge_and_clean_datasets, load_checkpoint, save_checkpoint, calculate_weather_summaries
 
 def main():
     print("--- STARTING ENVIRONMENTAL CAUSAL DATASET PIPELINE ---")
@@ -33,10 +33,10 @@ def main():
     #Reconstructs the dynamic in-memory cache based on the weather data already downloaded in previous checkpoints. This allows us to avoid making redundant API calls for locations and date ranges that have already been processed, significantly improving efficiency and reducing the number of requests to the Open-Meteo API.
     weather_cache = {}
     for disaster_id, content in final_dataset.items():
-        if content.get("weather_data"):
+        if content.get("weather_data") and content["weather_data"].get("daily_series"):
             #The cache key is composed of: (latitude, longitude, date_minus_10, date_plus_10)
             cache_key = (content["latitude"], content["longitude"], content["date_minus_10"], content["date_plus_10"])
-            weather_cache[cache_key] = content["weather_data"]
+            weather_cache[cache_key] = content["weather_data"]["daily_series"]
     
     print(f"Weather cache initialized with {len(weather_cache)} unique locations from history.")
     print("Step 3: Starting weather data download loop...")
@@ -62,14 +62,25 @@ def main():
             "start_date": row.start_date,
             "date_minus_10": row.date_minus_10,
             "date_plus_10": row.date_plus_10,
-            "weather_data": None,        # Weather data
+            "weather_data": {
+                "pre_event_summary": None, # Summary of weather conditions in the 10 days before the event
+                "post_event_summary": None, # Summary of weather conditions in the 10 days after the event
+                "daily_series": None          # Daily weather data for the entire 20-day window
+            },
             "satellite_data_path": None, # Path for satellite images 
             "news_data": None            # News data 
         }
         
         #Cache check to avoid unnecessary API calls
         if cache_key in weather_cache:
-            disaster_record["weather_data"] = weather_cache[cache_key]
+            extracted_weather = weather_cache[cache_key]
+            disaster_record["weather_data"]["daily_series"] = weather_cache[cache_key]
+
+            #Compute summaries even when reloading from cache
+            pre_sum, post_sum = calculate_weather_summaries(extracted_weather)
+            disaster_record["weather_data"]["pre_event_summary"] = pre_sum
+            disaster_record["weather_data"]["post_event_summary"] = post_sum
+
             final_dataset[disaster_id] = disaster_record
             
             #Immediate writing of the checkpoint to the hard drive 
@@ -97,7 +108,12 @@ def main():
                     
                     #Saves the weather data in the cache and in the current record
                     weather_cache[cache_key] = extracted_weather
-                    disaster_record["weather_data"] = extracted_weather
+                    disaster_record["weather_data"]["daily_series"] = extracted_weather
+
+                    #Compute summaries for newly fetched data
+                    pre_sum, post_sum = calculate_weather_summaries(extracted_weather)
+                    disaster_record["weather_data"]["pre_event_summary"] = pre_sum
+                    disaster_record["weather_data"]["post_event_summary"] = post_sum
                     
                     #Inserts the final record into the main data structure
                     final_dataset[disaster_id] = disaster_record
