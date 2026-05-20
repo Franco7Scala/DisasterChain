@@ -28,14 +28,17 @@ def merge_and_clean_datasets(emdat_path, gdis_path):
     df_merged['date_minus_10'] = (df_merged['start_date'] - pd.Timedelta(days=10)).dt.strftime('%Y-%m-%d')
     df_merged['date_plus_10'] = (df_merged['start_date'] + pd.Timedelta(days=10)).dt.strftime('%Y-%m-%d')
 
-    #Standardizes the disaster type column name to 'disaster_type' for consistency in the final dataset
-    df_merged = df_merged.rename(columns={'Disaster Type': 'disaster_type'})
+    #Standardizes the selected columns for consistency in the final dataset
+    df_merged = df_merged.rename(columns={'Disaster Type': 'disaster_type', 'Country': 'country', 'Region': 'region'})
     
     # Select and return only the necessary columns, ready for the next pipeline step
     df_selected = df_merged[[
-        'disasterno', 'disaster_type', 'latitude', 'longitude', 
+        'disasterno', 'disaster_type', 'country', 'region', 'latitude', 'longitude', 
         'start_date', 'date_minus_10', 'date_plus_10'
     ]].copy()
+
+    #Remove any duplicate columns sharing the same name
+    df_selected = df_selected.loc[:, ~df_selected.columns.duplicated()].copy()
     
     # Convert the start_date column to string for consistency in the final JSON
     df_selected['start_date'] = df_selected['start_date'].dt.strftime('%Y-%m-%d')

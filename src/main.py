@@ -28,6 +28,11 @@ def main():
         print(f"LOG: Production mode ACTIVE. Processing all {len(disasters_df)} events.")
         execution_df = disasters_df
 
+    #Temporary
+    print("\n[DEBUG] Elenco esatto di tutte le colonne disponibili nel dataframe")
+    print(list(execution_df.columns))
+    print("-"*60)
+
     #Checkpoint and cache initialization
     #Loads the previously saved work (if present) to avoid losing progress in case of a crash. This allows the application to resume from where it left off without having to start over, ensuring that all previously collected weather data is preserved and can be reused.
     final_dataset = load_checkpoint(FINAL_DATASET_OUTPUT_PATH)
@@ -60,6 +65,8 @@ def main():
         disaster_record = {
             "disaster_id": disaster_id,
             "disaster_type": row.disaster_type, 
+            "country": row.country,
+            "region": row.region,
             "latitude": row.latitude,
             "longitude": row.longitude,
             "start_date": row.start_date,
