@@ -7,11 +7,6 @@ from support.constants import *
 from support.utils import merge_and_clean_datasets, load_checkpoint, save_checkpoint, calculate_weather_summaries
 from support.news_engine import NEWS_ENGINE_VERSION, get_all_news_sources
 
-RELIEFWEB_APPNAME = "Unical-EnvironmentalCausalDataset-432353"
-WEATHER_RETRY_STATUS_CODES = {429, 502, 503, 504}
-NASA_POWER_DAILY_URL = "https://power.larc.nasa.gov/api/temporal/daily/point"
-
-
 def fetch_weather_data(api_parameters, disaster_id, row_index, max_retries=0):
     """
     Fetch weather data with retry/backoff for transient Open-Meteo failures.

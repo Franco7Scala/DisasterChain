@@ -13,37 +13,9 @@ Main behavior:
 import requests
 import urllib.parse
 from datetime import datetime, timedelta
+from support.constants import *
 import re
 import time
-
-NEWS_ENGINE_VERSION = "8.1-event-name-precision"
-
-# ============================================================
-# HEADERS
-# ============================================================
-
-HEADERS = {
-    "User-Agent": (
-        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-        "AppleWebKit/537.36 (KHTML, like Gecko) "
-        "Chrome/120.0.0.0 Safari/537.36"
-    ),
-    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-    "Accept-Language": "en-US,en;q=0.9",
-}
-HEADERS_JSON = {**HEADERS, "Accept": "application/json"}
-HEADERS_XML  = {**HEADERS, "Accept": "application/rss+xml,application/xml,text/xml"}
-FLOODLIST_SITEMAP_HEADERS = {"User-Agent": "Mozilla/5.0", "Accept": "*/*"}
-
-# ============================================================
-# UTILS BASE
-# ============================================================
-
-MONTH_NAMES = {
-    "01":"January","02":"February","03":"March","04":"April",
-    "05":"May","06":"June","07":"July","08":"August",
-    "09":"September","10":"October","11":"November","12":"December"
-}
 
 def get_date_window(start_date_str, days=21):
     try:
@@ -100,68 +72,6 @@ def log_source(source_name, count):
     """Log how many articles a source returned."""
     if count > 0:
         print(f"    [{source_name}] -> {count} articles found")
-
-# ============================================================
-# DISASTER TYPE TO SEARCH TERMS
-# ============================================================
-
-SEARCH_TERMS = {
-    "flood":               ["flood","flooding","floods","inundation"],
-    "storm":               ["storm","cyclone","hurricane","typhoon","tropical storm"],
-    "earthquake":          ["earthquake","quake","tremor","seismic"],
-    "landslide":           ["landslide","mudslide","mudflow","rockslide"],
-    "drought":             ["drought"],
-    "wildfire":            ["wildfire","forest fire","bushfire"],
-    "volcanic activity":   ["volcano","eruption","volcanic"],
-    "extreme temperature": ["heatwave","heat wave","cold wave","extreme heat","extreme cold"],
-    "epidemic":            ["epidemic","outbreak"],
-    "mass movement":       ["landslide","mudslide","collapse"],
-    "insect infestation":  ["locust","infestation"],
-}
-
-SEMANTIC_SYNONYMS = {
-    "flood":               ["flood","flooding","inundation","inundated","floodwater",
-                            "submerged","overflow","deluge","swamped","rain","rainfall",
-                            "downpour","heavy rain","flash flood"],
-    "storm":               ["storm","cyclone","typhoon","hurricane","tropical storm",
-                            "gale","tempest","rain","rainfall","downpour","wind",
-                            "squall","depression","disturbance"],
-    "earthquake":          ["earthquake","seismic","tremor","quake","aftershock",
-                            "magnitude","richter","fault"],
-    "landslide":           ["landslide","mudslide","mudflow","rockfall","avalanche",
-                            "debris","slope failure"],
-    "drought":             ["drought","dry spell","water shortage","arid",
-                            "rainfall deficit","crop failure"],
-    "wildfire":            ["wildfire","forest fire","bushfire","blaze","brushfire"],
-    "volcanic activity":   ["volcano","volcanic","eruption","lava","ash","pyroclastic"],
-    "extreme temperature": ["heatwave","heat wave","cold wave","extreme cold",
-                            "extreme heat","frost","freezing","temperature"],
-    "epidemic":            ["epidemic","outbreak","disease","cholera","typhoid",
-                            "infection","virus"],
-    "mass movement":       ["landslide","mudslide","rockfall","avalanche","collapse"],
-    "insect infestation":  ["locust","infestation","plague","swarm"],
-}
-
-METAPHOR_PATTERNS = [
-    r"flood(?:s|ed|ing)?\s+(?:twitter|social[\s-]?media|internet|inbox|market|"
-    r"email|news\s+feed|whatsapp|facebook|instagram|tiktok)",
-    r"(?:twitter|social[\s-]?media|internet|inbox)\s+flood",
-    r"flood(?:s|ed|ing)?\s+(?:of\s+)?(?:message|comment|gif|meme|tweet|post|"
-    r"request|complaint|call|order|application|capital|investor|money)",
-    r"storm\s+(?:of\s+)?(?:criticism|protest|controversy|backlash|applause|"
-    r"praise|tweet|comment|reaction|anger|outrage)",
-    r"(?:music|album|song|chart|box[\s-]?office|sales)\s+flood",
-    r"flood(?:s|ed|ing)?\s+(?:with\s+)?(?:fake[\s-]?news|misinformation)",
-    r"(?:memories|emotion|grief|joy|tears)\s+flood",
-    r"underwater\s+(?:paradise|wonderland|fantasyland)",
-    r"crystal[\s-]?clear\s+(?:river|water|lake)",
-    r"hiking\s+trail.{0,30}flood",
-    r"(?:retire|retirement|farewell|transfer|signing|scored|tournament|"
-    r"championship|medal|olympic)\b",
-    r"election.{0,30}flood",
-    r"flood.{0,30}election",
-]
-METAPHOR_RE = [re.compile(p, re.IGNORECASE) for p in METAPHOR_PATTERNS]
 
 def get_search_terms(disaster_type):
     clean = disaster_type.split("(")[0].strip().lower()
