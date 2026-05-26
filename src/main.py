@@ -157,6 +157,10 @@ def main():
     print(f"Weather cache initialized with {len(weather_cache)} unique locations from history.")
     print("Step 3: Starting weather data download loop...")
 
+    #Temporary counter to track how many events had a successful weather data retrieval, for logging purposes
+    total_processed_disasters = 0
+    disasters_with_news = 0
+
     #Main loop for data extraction
     #It uses itertuples() to transform the rows into named tuples, which are much faster to iterate over compared to iterrows(). This optimization is crucial for processing large datasets efficiently, especially when making API calls for each event.
     for index, row in enumerate(execution_df.itertuples()):
@@ -276,7 +280,16 @@ def main():
             disaster_record["news_data_searched"] = True # Set the flag to indicate that news data has been searched for this event
             resolved = news_payload["search_metadata"]["sources_successfully_resolved"]
             n_articles = news_payload["search_metadata"]["total_articles_retrieved"]
-            print(f" -> Completed. Articles retrieved: {n_articles} | Sources resolved: {resolved}")
+
+            total_processed_disasters += 1
+
+            if n_articles > 0:
+                disasters_with_news += 1
+            
+            success_rate = (disasters_with_news / total_processed_disasters) * 100 
+
+            print(f" -> Completed. Articles retrieved: {n_articles}. Sources resolved: {resolved}. Current news retrieval success rate: {success_rate:.2f}% ({disasters_with_news}/{total_processed_disasters})")
+            print(f" -> Telemetry: Disasters with news: {disasters_with_news}/{total_processed_disasters}, Current success rate: {success_rate:.2f}%")
             #Persistence: Saving the final record into the main data structure and immediately writing the checkpoint to the hard drive to ensure that progress is not lost in case of an unexpected interruption. This approach allows for incremental saving of results, providing robustness and reliability to the data collection process.
             final_dataset[disaster_id] = disaster_record
             

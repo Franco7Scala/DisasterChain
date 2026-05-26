@@ -29,6 +29,14 @@ WEATHER_VARIABLES = ["rain_sum", "snowfall_sum", "temperature_2m_max", "temperat
 IS_TEST_MODE = True
 TEST_LIMIT = 500
 
+#Official appname for ReliefWeb API
+RELIEFWEB_APPNAME = "Unical-EnvironmentalCausalDataset-432353"
+#Status codes
+WEATHER_RETRY_STATUS_CODES = {429, 502, 503, 504}
+#URL for NASA Power Daily
+NASA_POWER_DAILY_URL = "https://power.larc.nasa.gov/api/temporal/daily/point"
+
+
 #########################################################
 #news_engine
 #########################################################
