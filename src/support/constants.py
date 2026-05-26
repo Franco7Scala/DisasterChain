@@ -42,7 +42,7 @@ NASA_POWER_DAILY_URL = "https://power.larc.nasa.gov/api/temporal/daily/point"
 #########################################################
 
 # Version 
-NEWS_ENGINE_VERSION = "8.1-event-name-precision"
+NEWS_ENGINE_VERSION = "8.2-scored-relevance"
 
 # Headers
 HEADERS = {

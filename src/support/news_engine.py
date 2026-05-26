@@ -17,6 +17,7 @@ from support.constants import *
 import re
 import time
 
+
 def get_date_window(start_date_str, days=21):
     try:
         dt = datetime.strptime(start_date_str, "%Y-%m-%d")
@@ -90,7 +91,7 @@ def get_synonyms(disaster_type):
 
 # ============================================================
 # HELPER: GENERIC GOOGLE NEWS RSS 
-# Used by query_google_news() e query_floodlist()
+# Used by query_google_news() and query_floodlist().
 # ============================================================
 
 def _google_news_rss(query, country, start_date, disaster_type,
@@ -720,6 +721,36 @@ def deduplicate(articles):
         unique.append(a)
     return unique
 
+
+def filter_and_score_articles(articles, country, start_date, disaster_type,
+                              location_context=None):
+    scored_articles = []
+    for article in articles:
+        scoring = score_relevance(
+            title=article.get("title", ""),
+            text=article.get("raw_text", ""),
+            country=country,
+            start_date=start_date,
+            disaster_type=disaster_type,
+            location_context=location_context,
+            window_days=90,
+        )
+        if not scoring["is_relevant"]:
+            continue
+
+        enriched = dict(article)
+        enriched["relevance_score"] = scoring["score"]
+        enriched["relevance_reasons"] = scoring["reasons"]
+        if scoring["penalties"]:
+            enriched["relevance_penalties"] = scoring["penalties"]
+        scored_articles.append(enriched)
+
+    return sorted(
+        deduplicate(scored_articles),
+        key=lambda item: item.get("relevance_score", 0),
+        reverse=True,
+    )
+
 # ============================================================
 # ORCHESTRATOR - all listed sources
 # ============================================================
@@ -764,7 +795,13 @@ def get_all_news_sources(disaster_type, country, start_date, region, lat, lon,
 
     for source_name, query_fn in global_sources + regional_sources:
         try:
-            found = deduplicate(query_fn() or [])
+            found = filter_and_score_articles(
+                deduplicate(query_fn() or []),
+                country=country,
+                start_date=start_date,
+                disaster_type=disaster_type,
+                location_context=location_context,
+            )
         except Exception as exc:
             found = []
             source_errors[source_name] = f"{type(exc).__name__}: {exc}"
@@ -784,8 +821,13 @@ def get_all_news_sources(disaster_type, country, start_date, region, lat, lon,
     if len(articles) == 0:
         duckduckgo_used = True
         try:
-            ddg_articles = deduplicate(query_duckduckgo(
-                disaster_type, country, start_date) or [])
+            ddg_articles = filter_and_score_articles(
+                deduplicate(query_duckduckgo(disaster_type, country, start_date) or []),
+                country=country,
+                start_date=start_date,
+                disaster_type=disaster_type,
+                location_context=location_context,
+            )
         except Exception as exc:
             ddg_articles = []
             source_errors["DuckDuckGo"] = f"{type(exc).__name__}: {exc}"
@@ -1214,46 +1256,165 @@ def _has_event_term(text, location_context):
     return any(term.lower() in text_lower for term in terms)
 
 
+GENERIC_ARTICLE_PATTERNS = [
+    r"\bannual report\b",
+    r"\bsituation report\b",
+    r"\boverview\b",
+    r"\bsummary\b",
+    r"\bseason\b",
+    r"\bclimate report\b",
+    r"\bforecast\b",
+    r"\bpreparedness\b",
+    r"\bappeal\b",
+    r"\boperation update\b",
+]
+GENERIC_ARTICLE_RE = [re.compile(p, re.IGNORECASE) for p in GENERIC_ARTICLE_PATTERNS]
+
+
+def _contains_any(text, values):
+    text_lower = str(text).lower()
+    return any(str(value).lower() in text_lower for value in values if value)
+
+
+def score_relevance(title, text, country, start_date, disaster_type,
+                    pub_date_str=None, window_days=21,
+                    require_country_in_title=False,
+                    location_context=None):
+    """
+    Score article relevance without hard-requiring year, country, or event name.
+
+    Hard filters are reserved for clear false positives such as metaphorical
+    usage. Everything else contributes positive or negative evidence.
+    """
+    title = str(title or "")
+    text = str(text or "")
+    combined = f"{title} {text}"
+    title_lower = title.lower()
+    combined_lower = combined.lower()
+    year, _, month_name, _ = parse_date_parts(start_date)
+
+    score = 0
+    reasons = []
+    penalties = []
+
+    for pat in METAPHOR_RE:
+        if pat.search(combined_lower):
+            return {
+                "score": -99,
+                "reasons": [],
+                "penalties": ["metaphorical_or_unrelated_usage"],
+                "is_relevant": False,
+            }
+
+    country_variants = _country_variants(country)
+    if _contains_any(title, country_variants):
+        score += 2
+        reasons.append("country_in_title")
+    elif _contains_any(combined, country_variants):
+        score += 1
+        reasons.append("country_in_text")
+
+    if require_country_in_title and _contains_any(title, country_variants):
+        score += 1
+        reasons.append("required_country_title_bonus")
+
+    synonyms = get_synonyms(disaster_type)
+    if _contains_any(title, synonyms):
+        score += 3
+        reasons.append("hazard_in_title")
+    elif _contains_any(combined, synonyms):
+        score += 2
+        reasons.append("hazard_in_text")
+    else:
+        score -= 3
+        penalties.append("missing_hazard_term")
+
+    location_terms = _location_terms(location_context)
+    if location_terms:
+        if _contains_any(title, location_terms):
+            score += 3
+            reasons.append("local_place_in_title")
+        elif _contains_any(combined, location_terms):
+            score += 2
+            reasons.append("local_place_in_text")
+
+    event_terms = _event_terms(location_context)
+    if event_terms:
+        if _contains_any(title, event_terms):
+            score += 4
+            reasons.append("event_name_in_title")
+        elif _contains_any(combined, event_terms):
+            score += 3
+            reasons.append("event_name_in_text")
+
+    if year and year in combined_lower:
+        score += 2
+        reasons.append("event_year_present")
+    else:
+        title_years = set(re.findall(r"\b(19\d{2}|20\d{2})\b", title_lower))
+        if title_years and year not in title_years:
+            score -= 4
+            penalties.append("different_year_in_title")
+
+    if month_name and month_name.lower() in combined_lower:
+        score += 1
+        reasons.append("event_month_present")
+
+    if pub_date_str:
+        delta = days_from_event(pub_date_str, start_date)
+        if delta is not None:
+            if delta <= window_days:
+                score += 2
+                reasons.append("publication_date_near_event")
+            elif delta <= 365:
+                score += 1
+                reasons.append("publication_date_same_year")
+            else:
+                score -= 2
+                penalties.append("publication_date_far_from_event")
+
+    for pat in GENERIC_ARTICLE_RE:
+        if pat.search(title_lower):
+            event_or_place_in_title = (
+                _contains_any(title, _event_terms(location_context))
+                or _contains_any(title, _location_terms(location_context))
+            )
+            penalty = 2 if event_or_place_in_title else 8
+            score -= penalty
+            penalties.append("generic_title")
+            break
+
+    for m in re.finditer(r"\b(\d{4})\s*[-\u2013]\s*(\d{4})\b", combined_lower):
+        y1, y2 = m.group(1), m.group(2)
+        if year and y1 != year and y2 != year:
+            score -= 3
+            penalties.append("unrelated_multi_year_range")
+            break
+
+    threshold = 5 if event_terms or location_terms else 4
+    return {
+        "score": score,
+        "reasons": reasons,
+        "penalties": penalties,
+        "is_relevant": score >= threshold,
+    }
+
+
 def is_relevant(title, text, country, start_date, disaster_type,
                 pub_date_str=None, window_days=21,
                 require_country_in_title=False,
                 location_context=None):
-    combined = (str(title) + " " + str(text)).lower()
-    title_lower = str(title).lower()
-    year, _, _, _ = parse_date_parts(start_date)
-
-    if pub_date_str:
-        delta = days_from_event(pub_date_str, start_date)
-        if delta is not None and delta > window_days:
-            return False
-
-    for pat in METAPHOR_RE:
-        if pat.search(combined):
-            return False
-
-    if year not in combined:
-        return False
-
-    country_variants = _country_variants(country)
-    if not any(v in combined for v in country_variants):
-        return False
-
-    if require_country_in_title and not any(v in title_lower for v in country_variants):
-        return False
-
-    if not any(s in combined for s in get_synonyms(disaster_type)):
-        return False
-
-    if location_context and _event_terms(location_context):
-        if not _has_event_term(combined, location_context):
-            return False
-
-    for m in re.finditer(r"\b(\d{4})\s*[-\u2013]\s*(\d{4})\b", combined):
-        y1, y2 = m.group(1), m.group(2)
-        if y1 != year and y2 != year:
-            return False
-
-    return True
+    return score_relevance(
+        title=title,
+        text=text,
+        country=country,
+        start_date=start_date,
+        disaster_type=disaster_type,
+        pub_date_str=pub_date_str,
+        window_days=window_days,
+        require_country_in_title=require_country_in_title,
+        location_context=location_context,
+    )["is_relevant"]
 
 
 def query_wikipedia(disaster_type, country, start_date, location_context=None):
@@ -1305,8 +1466,6 @@ def query_wikipedia(disaster_type, country, start_date, location_context=None):
             full = f"{snippet} {extract}"
             if not is_relevant(title, full, country, start_date, disaster_type,
                                window_days=3650, location_context=location_context):
-                continue
-            if event_terms and not _has_event_term(title, location_context):
                 continue
             wiki_url = "https://en.wikipedia.org/wiki/" + urllib.parse.quote(title.replace(" ", "_"))
             results.append(make_article("Wikipedia", title, wiki_url, extract))
