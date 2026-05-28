@@ -164,7 +164,7 @@ def main():
     #Main loop for data extraction
     #It uses itertuples() to transform the rows into named tuples, which are much faster to iterate over compared to iterrows(). This optimization is crucial for processing large datasets efficiently, especially when making API calls for each event.
     for index, row in enumerate(execution_df.itertuples()):
-        disaster_id = row.disasterno
+        disaster_id = row.emdat_disaster_id
         
         #Selective rereading for missing news data
         already_processed = disaster_id in final_dataset

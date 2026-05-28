@@ -13,8 +13,15 @@ def merge_and_clean_datasets(emdat_path, gdis_path):
     # EM-DAT ID Cleaning: removes the final extension to align with GDIS format (e.g. 2000-0123-USA -> 2000-0123)
     df_emdat['disasterno_clean'] = df_emdat['DisNo.'].str.split('-').str[:2].str.join('-')
     
-    # INNER JOIN: keeps only records present in both datasets to ensure the presence of coordinates
-    df_merged = pd.merge(df_emdat, df_gdis, left_on='disasterno_clean', right_on='disasterno', how='inner')
+    # INNER JOIN: match the same disaster and country to avoid mixing
+    # locations from multi-country events.
+    df_merged = pd.merge(
+        df_emdat,
+        df_gdis,
+        left_on=['disasterno_clean', 'ISO'],
+        right_on=['disasterno', 'iso3'],
+        how='inner'
+    )
     
     # Drop rows with missing date components to ensure we can create a valid start_date
     df_merged = df_merged.dropna(subset=['Start Year', 'Start Month', 'Start Day'])
@@ -39,7 +46,7 @@ def merge_and_clean_datasets(emdat_path, gdis_path):
     
     # Select and return only the necessary columns, ready for the next pipeline step
     df_selected = df_merged[[
-        'disasterno', 'disaster_type', 'country', 'region', 'latitude', 'longitude', 
+        'DisNo.', 'disasterno', 'disaster_type', 'country', 'region', 'latitude', 'longitude', 
         'event_name', 'emdat_location',
         'geolocation', 'adm1', 'adm2', 'adm3', 'location',
         'start_date', 'date_minus_10', 'date_plus_10'
@@ -50,6 +57,44 @@ def merge_and_clean_datasets(emdat_path, gdis_path):
     
     # Convert the start_date column to string for consistency in the final JSON
     df_selected['start_date'] = df_selected['start_date'].dt.strftime('%Y-%m-%d')
+
+    df_selected = df_selected.rename(columns={'DisNo.': 'emdat_disaster_id'})
+
+    def join_unique(values):
+        cleaned = []
+        for value in values:
+            if pd.isna(value):
+                continue
+            text = str(value).strip()
+            if text and text.lower() not in {'nan', 'none', 'null'} and text not in cleaned:
+                cleaned.append(text)
+        return ' | '.join(cleaned)
+
+    # GDIS can contain multiple affected locations for the same EM-DAT event.
+    # Aggregate them into one row per country-specific disaster while preserving
+    # all location names as internal news-search context.
+    df_selected = (
+        df_selected
+        .groupby('emdat_disaster_id', as_index=False, sort=False)
+        .agg({
+            'disasterno': 'first',
+            'disaster_type': 'first',
+            'country': 'first',
+            'region': 'first',
+            'latitude': 'first',
+            'longitude': 'first',
+            'event_name': join_unique,
+            'emdat_location': join_unique,
+            'geolocation': join_unique,
+            'adm1': join_unique,
+            'adm2': join_unique,
+            'adm3': join_unique,
+            'location': join_unique,
+            'start_date': 'first',
+            'date_minus_10': 'first',
+            'date_plus_10': 'first',
+        })
+    )
     
     return df_selected
 
