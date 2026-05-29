@@ -157,9 +157,36 @@ def main():
     print(f"Weather cache initialized with {len(weather_cache)} unique locations from history.")
     print("Step 3: Starting weather data download loop...")
 
-    #Temporary counter to track how many events had a successful weather data retrieval, for logging purposes
+    execution_ids = list(execution_df["emdat_disaster_id"])
+
+    def has_current_news_version(record):
+        metadata = (record.get("news_data") or {}).get("search_metadata") or {}
+        return (
+            record.get("news_data_searched", False)
+            and metadata.get("news_engine_version") == NEWS_ENGINE_VERSION
+        )
+
+    # Counters are initialized from the checkpoint so resumed runs report the
+    # success rate over the whole test set, not only over newly processed rows.
     total_processed_disasters = 0
     disasters_with_news = 0
+    for disaster_id in execution_ids:
+        record = final_dataset.get(disaster_id)
+        if record and has_current_news_version(record):
+            total_processed_disasters += 1
+            if ((record.get("news_data") or {}).get("articles") or []):
+                disasters_with_news += 1
+
+    weather_failed_disasters = 0
+
+    if total_processed_disasters:
+        initial_success_rate = (disasters_with_news / total_processed_disasters) * 100
+        print(
+            f"LOG: Current-version checkpoint coverage: "
+            f"{total_processed_disasters}/{len(execution_df)} events, "
+            f"success rate: {initial_success_rate:.2f}% "
+            f"({disasters_with_news}/{total_processed_disasters})."
+        )
 
     #Main loop for data extraction
     #It uses itertuples() to transform the rows into named tuples, which are much faster to iterate over compared to iterrows(). This optimization is crucial for processing large datasets efficiently, especially when making API calls for each event.
@@ -251,6 +278,9 @@ def main():
                 disaster_record["weather_data"]["post_event_summary"] = post_sum
 
                 weather_success = True
+        if not weather_success:
+            weather_failed_disasters += 1
+
         #If weather data was successfully fetched, proceed with news data extraction
         if weather_success:
 
@@ -304,6 +334,14 @@ def main():
         time.sleep(3)
         
     print("\n--- PIPELINE EXECUTION COMPLETED SUCCESSFULY ---")
+    if total_processed_disasters:
+        final_success_rate = (disasters_with_news / total_processed_disasters) * 100
+        print(
+            f"Final news retrieval success rate: {final_success_rate:.2f}% "
+            f"({disasters_with_news}/{total_processed_disasters})."
+        )
+    if weather_failed_disasters:
+        print(f"Weather retrieval failed for {weather_failed_disasters} events.")
     print(f"Final dataset structure compiled and updated at: {FINAL_DATASET_OUTPUT_PATH}")
 
 if __name__ == "__main__":

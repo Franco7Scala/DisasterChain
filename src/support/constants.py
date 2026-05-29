@@ -42,7 +42,7 @@ NASA_POWER_DAILY_URL = "https://power.larc.nasa.gov/api/temporal/daily/point"
 #########################################################
 
 # Version 
-NEWS_ENGINE_VERSION = "8.2-scored-relevance"
+NEWS_ENGINE_VERSION = "8.4-event-query-builder-tuned"
 
 # Headers
 HEADERS = {
@@ -123,5 +123,7 @@ METAPHOR_PATTERNS = [
     r"championship|medal|olympic)\b",
     r"election.{0,30}flood",
     r"flood.{0,30}election",
+    r"(?:carnival|dancer|dancers|g-string|skimpy|sparkly|parade|photos?).{0,50}flood",
+    r"flood.{0,50}(?:carnival|dancer|dancers|g-string|skimpy|sparkly|parade|photos?)",
 ]
 METAPHOR_RE = [re.compile(p, re.IGNORECASE) for p in METAPHOR_PATTERNS]

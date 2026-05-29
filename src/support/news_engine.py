@@ -155,7 +155,8 @@ def _google_news_rss(query, country, start_date, disaster_type,
 # ============================================================
 
 def query_reliefweb(disaster_type, country, start_date,
-                    appname="Unical-EnvironmentalCausalDataset-432353"):
+                    appname="Unical-EnvironmentalCausalDataset-432353",
+                    location_context=None):
     year, _, mname, _ = parse_date_parts(start_date)
     start_w, end_w = get_date_window(start_date, 30)
     terms = get_search_terms(disaster_type)
@@ -612,7 +613,7 @@ def query_cima_meteoalarm(disaster_type, country, start_date):
 # SOURCE 13 - GOOGLE NEWS RSS (general search)
 # ============================================================
 
-def query_google_news(disaster_type, country, start_date):
+def query_google_news(disaster_type, country, start_date, location_context=None):
     year, _, mname, _ = parse_date_parts(start_date)
     primary = get_search_terms(disaster_type)[0]
 
@@ -624,11 +625,14 @@ def query_google_news(disaster_type, country, start_date):
     except Exception:
         date_filter = year
 
-    queries = [
-        f'"{country}" "{primary}" {mname} {year} {date_filter}',
-        f'"{country}" {primary} {year} {date_filter}',
-        f'{country} {primary} {year} {date_filter}',
-    ]
+    queries = build_event_search_queries(
+        disaster_type,
+        country,
+        start_date,
+        location_context=location_context,
+        include_date_filter=True,
+        max_queries=8,
+    )
 
     results = []
     for i, q in enumerate(queries):
@@ -648,17 +652,23 @@ def query_google_news(disaster_type, country, start_date):
 # SOURCE 14 - DUCKDUCKGO (last resort)
 # ============================================================
 
-def query_duckduckgo(disaster_type, country, start_date):
+def query_duckduckgo(disaster_type, country, start_date, location_context=None):
     year, _, mname, _ = parse_date_parts(start_date)
     primary = get_search_terms(disaster_type)[0]
     results = []
 
-    queries = [
+    queries = build_event_search_queries(
+        disaster_type,
+        country,
+        start_date,
+        location_context=location_context,
+        max_queries=10,
+    )
+    queries.insert(
+        0,
         f'site:reliefweb.int OR site:floodlist.com OR site:gdacs.org '
-        f'"{country}" {primary} {mname} {year}',
-        f'"{country}" "{primary}" {mname} {year} disaster',
-        f'{country} {primary} {year}',
-    ]
+        f'"{country}" {primary} {mname} {year}'
+    )
 
     for q in queries:
         r = safe_get("https://html.duckduckgo.com/html/",
@@ -689,7 +699,8 @@ def query_duckduckgo(disaster_type, country, start_date):
                 except Exception:
                     pass
             if is_relevant(snippet, snippet, country, start_date, disaster_type,
-                           window_days=30):
+                           window_days=30,
+                           location_context=location_context):
                 results.append(make_article("DuckDuckGo",
                     f"{country} {primary} {year}",
                     link if link.startswith("http") else f"https:{link}",
@@ -771,11 +782,14 @@ def get_all_news_sources(disaster_type, country, start_date, region, lat, lon,
 
     global_sources = [
         ("ReliefWeb", lambda: query_reliefweb(
-            disaster_type, country, start_date, reliefweb_appname)),
+            disaster_type, country, start_date, reliefweb_appname,
+            location_context=location_context)),
         ("GDACS", lambda: query_gdacs(disaster_type, country, start_date)),
         ("NASA Earth Observatory/EONET", lambda: query_nasa_eonet(
             disaster_type, country, start_date)),
         ("Wikipedia", lambda: query_wikipedia(
+            disaster_type, country, start_date, location_context=location_context)),
+        ("Google News RSS", lambda: query_google_news(
             disaster_type, country, start_date, location_context=location_context)),
         ("IFRC GO", lambda: query_ifrc_go(disaster_type, country, start_date)),
         ("ERCC portal", lambda: query_ercc(disaster_type, country, start_date)),
@@ -822,7 +836,12 @@ def get_all_news_sources(disaster_type, country, start_date, region, lat, lon,
         duckduckgo_used = True
         try:
             ddg_articles = filter_and_score_articles(
-                deduplicate(query_duckduckgo(disaster_type, country, start_date) or []),
+                deduplicate(query_duckduckgo(
+                    disaster_type,
+                    country,
+                    start_date,
+                    location_context=location_context
+                ) or []),
                 country=country,
                 start_date=start_date,
                 disaster_type=disaster_type,
@@ -906,7 +925,8 @@ def safe_get(url, params=None, headers=None, timeout=10, retries=3):
 
 
 def query_reliefweb(disaster_type, country, start_date,
-                    appname="Unical-EnvironmentalCausalDataset-432353"):
+                    appname="Unical-EnvironmentalCausalDataset-432353",
+                    location_context=None):
     """
     ReliefWeb v8: use simple, valid API parameters, then apply
     the relevance filter locally to avoid 400 errors from nested filters.
@@ -918,11 +938,13 @@ def query_reliefweb(disaster_type, country, start_date,
     results = []
     seen = set()
 
-    queries = [
-        f"{country} {primary} {mname} {year}",
-        f"{country} {primary} {year}",
-        f"{country} {clean_type} {year}",
-    ]
+    queries = build_event_search_queries(
+        disaster_type,
+        country,
+        start_date,
+        location_context=location_context,
+        max_queries=10,
+    )
 
     for endpoint in ["reports", "disasters"]:
         for query in queries:
@@ -984,7 +1006,8 @@ def query_reliefweb(disaster_type, country, start_date,
                 if pub and not (start_w <= pub[:10] <= end_w):
                     continue
                 if is_relevant(title, body, country, start_date, disaster_type,
-                               pub_date_str=pub, window_days=60):
+                               pub_date_str=pub, window_days=60,
+                               location_context=location_context):
                     seen.add(key)
                     results.append(make_article(source, title, url, body))
 
@@ -1048,6 +1071,76 @@ def _location_terms(location_context):
     return terms
 
 
+def _compact_terms(terms, limit=6):
+    compacted = []
+    for term in terms:
+        if _is_blank_context_value(term):
+            continue
+        cleaned = re.sub(r"\s+", " ", str(term)).strip()
+        if len(cleaned) < 3:
+            continue
+        key = cleaned.lower()
+        if key not in {item.lower() for item in compacted}:
+            compacted.append(cleaned)
+        if len(compacted) >= limit:
+            break
+    return compacted
+
+
+def build_event_search_queries(disaster_type, country, start_date,
+                               location_context=None,
+                               include_date_filter=False,
+                               max_queries=12):
+    """
+    Build high-to-low precision search queries for a disaster event.
+
+    The query order favors event names and local places first, then falls back
+    to country-level queries. This makes aggregated GDIS/EM-DAT locations
+    actionable without storing them in the final JSON.
+    """
+    year, _, month_name, _ = parse_date_parts(start_date)
+    primary = get_search_terms(disaster_type)[0]
+    clean_type = disaster_type.split("(")[0].strip()
+    event_terms = _compact_terms(_event_terms(location_context), limit=4)
+    location_terms = _compact_terms(_location_terms(location_context), limit=8)
+    country_name = _country_variants(country)[0]
+
+    date_filter = ""
+    if include_date_filter:
+        try:
+            event_dt = datetime.strptime(start_date, "%Y-%m-%d")
+            after_dt = (event_dt - timedelta(days=30)).strftime("%Y-%m-%d")
+            before_dt = (event_dt + timedelta(days=60)).strftime("%Y-%m-%d")
+            date_filter = f" after:{after_dt} before:{before_dt}"
+        except Exception:
+            date_filter = ""
+
+    queries = []
+
+    def add(query):
+        normalized = re.sub(r"\s+", " ", query).strip()
+        if not normalized:
+            return
+        if normalized.lower() not in {item.lower() for item in queries}:
+            queries.append(normalized)
+
+    for event in event_terms:
+        add(f'"{event}" "{country_name}" {primary} {year}{date_filter}')
+        add(f'"{event}" "{country_name}" {clean_type} {year}{date_filter}')
+        add(f'"{event}" disaster {year}{date_filter}')
+
+    for place in location_terms:
+        add(f'"{place}" "{country_name}" {primary} {month_name} {year}{date_filter}')
+        add(f'"{place}" "{country_name}" {primary} {year}{date_filter}')
+        add(f'"{place}" {primary} {year}{date_filter}')
+
+    add(f'"{country_name}" "{primary}" {month_name} {year}{date_filter}')
+    add(f'"{country_name}" {primary} {year}{date_filter}')
+    add(f'{country_name} {clean_type} {year}{date_filter}')
+
+    return queries[:max_queries]
+
+
 def _floodlist_article_url(slug):
     return f"https://floodlist.com/america/{slug}"
 
@@ -1068,18 +1161,13 @@ def query_floodlist(disaster_type, country, start_date, location_context=None):
     year, _, mname, _ = parse_date_parts(start_date)
     primary = get_search_terms(disaster_type)[0]
     places = _location_terms(location_context)
-    search_phrases = []
-
-    for place in places[:4]:
-        search_phrases.extend([
-            f"{place} {country} {primary} {year}",
-            f"{place} {primary} {mname} {year}",
-            f"{place} {primary} {year}",
-        ])
-    search_phrases.extend([
-        f"{country} {primary} {mname} {year}",
-        f"{country} {primary} {year}",
-    ])
+    search_phrases = build_event_search_queries(
+        disaster_type,
+        country,
+        start_date,
+        location_context=location_context,
+        max_queries=14,
+    )
 
     results = []
     seen = set()
@@ -1330,22 +1418,31 @@ def score_relevance(title, text, country, start_date, disaster_type,
         penalties.append("missing_hazard_term")
 
     location_terms = _location_terms(location_context)
+    matched_location_or_event = False
     if location_terms:
         if _contains_any(title, location_terms):
             score += 3
             reasons.append("local_place_in_title")
+            matched_location_or_event = True
         elif _contains_any(combined, location_terms):
             score += 2
             reasons.append("local_place_in_text")
+            matched_location_or_event = True
 
     event_terms = _event_terms(location_context)
     if event_terms:
         if _contains_any(title, event_terms):
             score += 4
             reasons.append("event_name_in_title")
+            matched_location_or_event = True
         elif _contains_any(combined, event_terms):
             score += 3
             reasons.append("event_name_in_text")
+            matched_location_or_event = True
+
+    if (location_terms or event_terms) and not matched_location_or_event:
+        score -= 1
+        penalties.append("missing_local_or_event_context")
 
     if year and year in combined_lower:
         score += 2
@@ -1431,11 +1528,13 @@ def query_wikipedia(disaster_type, country, start_date, location_context=None):
             f"{event} {clean_type} {year}",
             f"{event} cyclone storm {year}",
         ])
-    queries.extend([
-        f"{year} {country_for_query} {terms[0]}",
-        f"{mname} {year} {country_for_query} {terms[0]}",
-        f"{country_for_query} {terms[0]} {year}",
-    ])
+    queries.extend(build_event_search_queries(
+        disaster_type,
+        country,
+        start_date,
+        location_context=location_context,
+        max_queries=8,
+    ))
 
     seen = set()
     results = []
