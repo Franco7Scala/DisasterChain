@@ -734,6 +734,40 @@ def deduplicate(articles):
     return unique
 
 
+SOURCE_RELEVANCE_THRESHOLDS = {
+    "ReliefWeb": 4,
+    "ReliefWeb Disasters": 4,
+    "ReliefWeb Updates": 4,
+    "GDACS": 4,
+    "NASA EONET": 4,
+    "NASA Earth Observatory/EONET": 4,
+    "IFRC GO": 4,
+    "ERCC Copernicus": 4,
+    "ERCC portal": 4,
+    "WMO": 4,
+    "FloodList": 5,
+    "ADRC Asia": 4,
+    "AHA Centre": 4,
+    "Africa Hazards Watch": 4,
+    "ReliefWeb Africa": 4,
+    "PAHO": 4,
+    "NOAA Climate Report": 5,
+    "CIMA Research": 4,
+    "MeteoAlarm": 4,
+    "Wikipedia": 7,
+    "Google News": 6,
+    "DuckDuckGo": 7,
+}
+
+
+def _source_threshold(source_name, default_threshold):
+    source_name = str(source_name or "")
+    for prefix, threshold in SOURCE_RELEVANCE_THRESHOLDS.items():
+        if source_name.startswith(prefix):
+            return threshold
+    return default_threshold
+
+
 def filter_and_score_articles(articles, country, start_date, disaster_type,
                               location_context=None):
     scored_articles = []
@@ -747,11 +781,16 @@ def filter_and_score_articles(articles, country, start_date, disaster_type,
             location_context=location_context,
             window_days=90,
         )
-        if not scoring["is_relevant"]:
+        threshold = _source_threshold(
+            article.get("source", ""),
+            scoring["threshold"],
+        )
+        if scoring["score"] < threshold:
             continue
 
         enriched = dict(article)
         enriched["relevance_score"] = scoring["score"]
+        enriched["relevance_threshold"] = threshold
         enriched["relevance_reasons"] = scoring["reasons"]
         if scoring["penalties"]:
             enriched["relevance_penalties"] = scoring["penalties"]
@@ -1457,6 +1496,7 @@ def score_relevance(title, text, country, start_date, disaster_type,
         if pat.search(combined_lower):
             return {
                 "score": -99,
+                "threshold": 99,
                 "reasons": [],
                 "penalties": ["metaphorical_or_unrelated_usage"],
                 "is_relevant": False,
@@ -1559,6 +1599,7 @@ def score_relevance(title, text, country, start_date, disaster_type,
     threshold = 5 if event_terms or location_terms else 4
     return {
         "score": score,
+        "threshold": threshold,
         "reasons": reasons,
         "penalties": penalties,
         "is_relevant": score >= threshold,
@@ -1568,8 +1609,9 @@ def score_relevance(title, text, country, start_date, disaster_type,
 def is_relevant(title, text, country, start_date, disaster_type,
                 pub_date_str=None, window_days=21,
                 require_country_in_title=False,
-                location_context=None):
-    return score_relevance(
+                location_context=None,
+                minimum_score=4):
+    scoring = score_relevance(
         title=title,
         text=text,
         country=country,
@@ -1579,7 +1621,8 @@ def is_relevant(title, text, country, start_date, disaster_type,
         window_days=window_days,
         require_country_in_title=require_country_in_title,
         location_context=location_context,
-    )["is_relevant"]
+    )
+    return scoring["score"] >= minimum_score
 
 
 def query_wikipedia(disaster_type, country, start_date, location_context=None):

@@ -42,7 +42,7 @@ NASA_POWER_DAILY_URL = "https://power.larc.nasa.gov/api/temporal/daily/point"
 #########################################################
 
 # Version 
-NEWS_ENGINE_VERSION = "8.5-fuzzy-entity-matching"
+NEWS_ENGINE_VERSION = "8.6-source-specific-thresholds"
 
 # Headers
 HEADERS = {
