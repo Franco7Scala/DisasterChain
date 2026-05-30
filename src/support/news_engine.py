@@ -14,6 +14,7 @@ import requests
 import urllib.parse
 from datetime import datetime, timedelta
 from support.constants import *
+from difflib import SequenceMatcher
 import re
 import time
 
@@ -1101,7 +1102,7 @@ def build_event_search_queries(disaster_type, country, start_date,
     year, _, month_name, _ = parse_date_parts(start_date)
     primary = get_search_terms(disaster_type)[0]
     clean_type = disaster_type.split("(")[0].strip()
-    event_terms = _compact_terms(_event_terms(location_context), limit=4)
+    event_terms = _compact_terms(_event_terms(location_context, include_aliases=True), limit=6)
     location_terms = _compact_terms(_location_terms(location_context), limit=8)
     country_name = _country_variants(country)[0]
 
@@ -1310,7 +1311,37 @@ def _country_variants(country):
     return [v for v in dict.fromkeys(variants) if v]
 
 
-def _event_terms(location_context):
+def _entity_aliases(term):
+    if _is_blank_context_value(term):
+        return []
+
+    cleaned = re.sub(r"\s+", " ", str(term)).strip()
+    aliases = [cleaned]
+    lower = cleaned.lower()
+
+    hazard_prefixes = [
+        "cyclone", "tropical cyclone", "storm", "tropical storm",
+        "hurricane", "typhoon", "earthquake", "flood", "floods",
+        "volcano", "eruption",
+    ]
+
+    for prefix in hazard_prefixes:
+        prefix_with_space = f"{prefix} "
+        if lower.startswith(prefix_with_space):
+            aliases.append(cleaned[len(prefix_with_space):].strip())
+        elif len(cleaned) >= 4:
+            aliases.append(f"{prefix.title()} {cleaned}")
+
+    # Hyphenated article titles often join multiple cyclone names.
+    for piece in re.split(r"[-\u2013\u2014]", cleaned):
+        piece = piece.strip()
+        if len(piece) >= 3:
+            aliases.append(piece)
+
+    return _compact_terms(aliases, limit=12)
+
+
+def _event_terms(location_context, include_aliases=False):
     if not location_context:
         return []
     event_name = location_context.get("event_name")
@@ -1321,6 +1352,8 @@ def _event_terms(location_context):
         cleaned = part.strip()
         if len(cleaned) >= 3 and cleaned.lower() not in {"nan", "none", "null"}:
             terms.append(cleaned)
+            if include_aliases:
+                terms.extend(_entity_aliases(cleaned))
     return terms
 
 
@@ -1336,32 +1369,67 @@ def _is_blank_context_value(value):
     return text in {"", "nan", "none", "null", "nat"}
 
 
-def _has_event_term(text, location_context):
-    terms = _event_terms(location_context)
-    if not terms:
-        return True
-    text_lower = str(text).lower()
-    return any(term.lower() in text_lower for term in terms)
+def _normalize_entity(text):
+    text = str(text or "").lower()
+    text = re.sub(r"[^a-z0-9\s]", " ", text)
+    stopwords = {
+        "the", "a", "an", "of", "and", "or", "in", "on", "at", "to", "for",
+        "state", "province", "district", "region", "city", "area", "areas",
+        "department", "county", "municipality", "island", "islands",
+    }
+    tokens = [
+        token for token in re.sub(r"\s+", " ", text).strip().split()
+        if token and token not in stopwords
+    ]
+    return " ".join(tokens)
 
 
-GENERIC_ARTICLE_PATTERNS = [
-    r"\bannual report\b",
-    r"\bsituation report\b",
-    r"\boverview\b",
-    r"\bsummary\b",
-    r"\bseason\b",
-    r"\bclimate report\b",
-    r"\bforecast\b",
-    r"\bpreparedness\b",
-    r"\bappeal\b",
-    r"\boperation update\b",
-]
-GENERIC_ARTICLE_RE = [re.compile(p, re.IGNORECASE) for p in GENERIC_ARTICLE_PATTERNS]
+def _token_set_similarity(left, right):
+    left_norm = _normalize_entity(left)
+    right_norm = _normalize_entity(right)
+    if not left_norm or not right_norm:
+        return 0.0
+
+    left_tokens = set(left_norm.split())
+    right_tokens = set(right_norm.split())
+    overlap = len(left_tokens & right_tokens)
+    if overlap:
+        token_score = (2 * overlap) / (len(left_tokens) + len(right_tokens))
+    else:
+        token_score = 0.0
+
+    sequence_score = SequenceMatcher(None, left_norm, right_norm).ratio()
+    return max(token_score, sequence_score)
+
+
+def _contains_fuzzy(text, values, threshold=0.86):
+    text_norm = _normalize_entity(text)
+    if not text_norm:
+        return False
+
+    for value in values:
+        if _is_blank_context_value(value):
+            continue
+        value_norm = _normalize_entity(value)
+        if not value_norm:
+            continue
+        if value_norm in text_norm:
+            return True
+
+        value_len = len(value_norm.split())
+        text_tokens = text_norm.split()
+        min_window = max(1, value_len - 1)
+        max_window = min(len(text_tokens), value_len + 3)
+        for size in range(min_window, max_window + 1):
+            for start in range(0, len(text_tokens) - size + 1):
+                window = " ".join(text_tokens[start:start + size])
+                if _token_set_similarity(value_norm, window) >= threshold:
+                    return True
+    return False
 
 
 def _contains_any(text, values):
-    text_lower = str(text).lower()
-    return any(str(value).lower() in text_lower for value in values if value)
+    return _contains_fuzzy(text, values)
 
 
 def score_relevance(title, text, country, start_date, disaster_type,
@@ -1429,7 +1497,7 @@ def score_relevance(title, text, country, start_date, disaster_type,
             reasons.append("local_place_in_text")
             matched_location_or_event = True
 
-    event_terms = _event_terms(location_context)
+    event_terms = _event_terms(location_context, include_aliases=True)
     if event_terms:
         if _contains_any(title, event_terms):
             score += 4

@@ -42,7 +42,7 @@ NASA_POWER_DAILY_URL = "https://power.larc.nasa.gov/api/temporal/daily/point"
 #########################################################
 
 # Version 
-NEWS_ENGINE_VERSION = "8.4-event-query-builder-tuned"
+NEWS_ENGINE_VERSION = "8.5-fuzzy-entity-matching"
 
 # Headers
 HEADERS = {
@@ -127,3 +127,17 @@ METAPHOR_PATTERNS = [
     r"flood.{0,50}(?:carnival|dancer|dancers|g-string|skimpy|sparkly|parade|photos?)",
 ]
 METAPHOR_RE = [re.compile(p, re.IGNORECASE) for p in METAPHOR_PATTERNS]
+
+GENERIC_ARTICLE_PATTERNS = [
+    r"\bannual report\b",
+    r"\bsituation report\b",
+    r"\boverview\b",
+    r"\bsummary\b",
+    r"\bseason\b",
+    r"\bclimate report\b",
+    r"\bforecast\b",
+    r"\bpreparedness\b",
+    r"\bappeal\b",
+    r"\boperation update\b",
+]
+GENERIC_ARTICLE_RE = [re.compile(p, re.IGNORECASE) for p in GENERIC_ARTICLE_PATTERNS]
