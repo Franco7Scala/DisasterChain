@@ -653,59 +653,137 @@ def query_google_news(disaster_type, country, start_date, location_context=None)
 # SOURCE 14 - DUCKDUCKGO (last resort)
 # ============================================================
 
-def query_duckduckgo(disaster_type, country, start_date, location_context=None):
-    year, _, mname, _ = parse_date_parts(start_date)
-    primary = get_search_terms(disaster_type)[0]
-    results = []
+def _decode_duckduckgo_url(link):
+    if not link:
+        return ""
+    if "uddg=" in link:
+        try:
+            return urllib.parse.unquote(
+                urllib.parse.parse_qs(
+                    urllib.parse.urlparse(link).query
+                ).get("uddg", [link])[0]
+            )
+        except Exception:
+            pass
+    if link.startswith("//"):
+        return f"https:{link}"
+    return link
 
-    queries = build_event_search_queries(
+
+def _parse_duckduckgo_results(html):
+    results = []
+    blocks = re.findall(
+        r'<div[^>]+class="[^"]*result[^"]*"[^>]*>(.*?)</div>\s*</div>',
+        html,
+        re.DOTALL,
+    )
+    if not blocks:
+        blocks = re.findall(
+            r'<div[^>]+class="[^"]*web-result[^"]*"[^>]*>(.*?)</div>\s*</div>',
+            html,
+            re.DOTALL,
+        )
+
+    for block in blocks:
+        title_match = re.search(
+            r'<a[^>]+class="[^"]*result__a[^"]*"[^>]+href="([^"]+)"[^>]*>(.*?)</a>',
+            block,
+            re.DOTALL,
+        )
+        snippet_match = re.search(
+            r'<(?:a|div)[^>]+class="[^"]*result__snippet[^"]*"[^>]*>(.*?)</(?:a|div)>',
+            block,
+            re.DOTALL,
+        )
+
+        if not title_match:
+            continue
+
+        url = _decode_duckduckgo_url(title_match.group(1))
+        title = clean_html(title_match.group(2))
+        snippet = clean_html(snippet_match.group(1)) if snippet_match else ""
+        if title and url:
+            results.append((title, url, snippet))
+
+    return results
+
+
+def _duckduckgo_query_specs(disaster_type, country, start_date, location_context):
+    year, _, month_name, _ = parse_date_parts(start_date)
+    primary = get_search_terms(disaster_type)[0]
+    clean_type = disaster_type.split("(")[0].strip()
+    country_name = _country_variants(country)[0]
+    event_terms = _compact_terms(_event_terms(location_context, include_aliases=True), limit=4)
+    location_terms = _compact_terms(_location_terms(location_context), limit=6)
+
+    specs = []
+
+    def add(query, precision):
+        normalized = re.sub(r"\s+", " ", query).strip()
+        if not normalized:
+            return
+        if normalized.lower() not in {item["query"].lower() for item in specs}:
+            specs.append({"query": normalized, "precision": precision})
+
+    reliable_sites = [
+        "reliefweb.int",
+        "floodlist.com",
+        "gdacs.org",
+        "ifrc.org",
+        "earthobservatory.nasa.gov",
+    ]
+
+    for event in event_terms:
+        add(f'"{event}" "{country_name}" {primary} {year}', "high")
+        add(f'"{event}" disaster {year}', "high")
+        for site in reliable_sites[:3]:
+            add(f'site:{site} "{event}" "{country_name}" {year}', "high")
+
+    for place in location_terms:
+        add(f'"{place}" "{country_name}" {primary} {month_name} {year}', "high")
+        add(f'"{place}" "{country_name}" {clean_type} {year}', "high")
+        add(f'"{place}" {primary} disaster {year}', "medium")
+        for site in reliable_sites[:3]:
+            add(f'site:{site} "{place}" "{country_name}" {primary} {year}', "high")
+
+    add(f'"{country_name}" "{primary}" "{month_name}" {year} disaster', "medium")
+    add(f'"{country_name}" "{clean_type}" {year} disaster', "low")
+
+    return specs[:18]
+
+
+def query_duckduckgo(disaster_type, country, start_date, location_context=None):
+    results = []
+    seen = set()
+    query_specs = _duckduckgo_query_specs(
         disaster_type,
         country,
         start_date,
-        location_context=location_context,
-        max_queries=10,
-    )
-    queries.insert(
-        0,
-        f'site:reliefweb.int OR site:floodlist.com OR site:gdacs.org '
-        f'"{country}" {primary} {mname} {year}'
+        location_context or {},
     )
 
-    for q in queries:
+    for spec in query_specs:
+        q = spec["query"]
         r = safe_get("https://html.duckduckgo.com/html/",
-                     params={"q":q}, headers=HEADERS)
+                     params={"q": q}, headers=HEADERS)
         if r is None:
             continue
-        snippets, urls = [], []
-        for pat in [r'<a class="result__snippet"[^>]*>(.*?)</a>',
-                    r'<div class="result__snippet"[^>]*>(.*?)</div>']:
-            snippets = re.findall(pat, r.text, re.DOTALL)
-            if snippets:
-                break
-        for pat in [r'<a class="result__url"[^>]*href="([^"]+)"',
-                    r'<a class="result__a"[^>]*href="([^"]+)"']:
-            urls = re.findall(pat, r.text)
-            if urls:
-                break
-        for snippet_raw, link in zip(snippets, urls):
-            snippet = clean_html(snippet_raw).strip()
-            if not snippet:
+
+        for title, link, snippet in _parse_duckduckgo_results(r.text):
+            key = link.rstrip("/") or title.lower()
+            if key in seen:
                 continue
-            if "uddg=" in link:
-                try:
-                    link = urllib.parse.unquote(
-                        urllib.parse.parse_qs(
-                            urllib.parse.urlparse(link).query
-                        ).get("uddg",[link])[0])
-                except Exception:
-                    pass
-            if is_relevant(snippet, snippet, country, start_date, disaster_type,
+            seen.add(key)
+
+            raw_text = " ".join(part for part in [title, snippet] if part)
+            if is_relevant(title, raw_text, country, start_date, disaster_type,
                            window_days=30,
                            location_context=location_context):
-                results.append(make_article("DuckDuckGo",
-                    f"{country} {primary} {year}",
-                    link if link.startswith("http") else f"https:{link}",
-                    snippet))
+                article = make_article("DuckDuckGo", title, link, raw_text)
+                article["search_query"] = q
+                article["query_precision"] = spec["precision"]
+                results.append(article)
+
             if len(results) >= 3:
                 log_source("DuckDuckGo", len(results))
                 return results
@@ -768,6 +846,19 @@ def _source_threshold(source_name, default_threshold):
     return default_threshold
 
 
+def _article_relevance_threshold(article, default_threshold):
+    threshold = _source_threshold(article.get("source", ""), default_threshold)
+
+    if str(article.get("source", "")).startswith("DuckDuckGo"):
+        precision = article.get("query_precision")
+        if precision == "high":
+            threshold = min(threshold, 6)
+        elif precision == "low":
+            threshold += 1
+
+    return threshold
+
+
 def filter_and_score_articles(articles, country, start_date, disaster_type,
                               location_context=None):
     scored_articles = []
@@ -781,10 +872,7 @@ def filter_and_score_articles(articles, country, start_date, disaster_type,
             location_context=location_context,
             window_days=90,
         )
-        threshold = _source_threshold(
-            article.get("source", ""),
-            scoring["threshold"],
-        )
+        threshold = _article_relevance_threshold(article, scoring["threshold"])
         if scoring["score"] < threshold:
             continue
 
