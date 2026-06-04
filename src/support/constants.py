@@ -42,7 +42,7 @@ NASA_POWER_DAILY_URL = "https://power.larc.nasa.gov/api/temporal/daily/point"
 #########################################################
 
 # Version 
-NEWS_ENGINE_VERSION = "8.7-targeted-duckduckgo"
+NEWS_ENGINE_VERSION = "8.9-confidence-non-article-flag"
 
 # Headers
 HEADERS = {
@@ -141,3 +141,94 @@ GENERIC_ARTICLE_PATTERNS = [
     r"\boperation update\b",
 ]
 GENERIC_ARTICLE_RE = [re.compile(p, re.IGNORECASE) for p in GENERIC_ARTICLE_PATTERNS]
+
+NON_ARTICLE_URL_PATTERNS = [
+    r"/taxonomy/term/",
+    r"/wiki/(?:List_of|Category:|Portal:|Template:)",
+    r"/(?:category|tag|tags)/",
+]
+NON_ARTICLE_URL_RE = [re.compile(p, re.IGNORECASE) for p in NON_ARTICLE_URL_PATTERNS]
+
+NON_ARTICLE_TITLE_PATTERNS = [
+    r"^\s*list of\b",
+    r"\btaxonomy\b",
+    r"\bcategory\b",
+]
+NON_ARTICLE_TITLE_RE = [re.compile(p, re.IGNORECASE) for p in NON_ARTICLE_TITLE_PATTERNS]
+
+SOURCE_RELEVANCE_THRESHOLDS = {
+    "ReliefWeb": 4,
+    "ReliefWeb Disasters": 4,
+    "ReliefWeb Updates": 4,
+    "GDACS": 4,
+    "NASA EONET": 4,
+    "NASA Earth Observatory/EONET": 4,
+    "IFRC GO": 4,
+    "ERCC Copernicus": 4,
+    "ERCC portal": 4,
+    "WMO": 4,
+    "FloodList": 5,
+    "ADRC Asia": 4,
+    "AHA Centre": 4,
+    "Africa Hazards Watch": 4,
+    "ReliefWeb Africa": 4,
+    "PAHO": 4,
+    "NOAA Climate Report": 5,
+    "CIMA Research": 4,
+    "MeteoAlarm": 4,
+    "Wikipedia": 7,
+    "Google News": 6,
+    "DuckDuckGo": 7,
+}
+
+
+
+#########################################################
+#analyze_news_benchmark
+#########################################################
+DEFAULT_INPUT_PATH = os.path.join(RESULTS_DIR, "news_benchmark_review.xlsx")
+DEFAULT_REPORT_PATH = os.path.join(RESULTS_DIR, "news_benchmark_report.txt")
+DEFAULT_WRONG_OUTPUT_PATH = os.path.join(RESULTS_DIR, "news_benchmark_wrong_cases.csv")
+
+
+VALID_LABELS = {"correct", "wrong", "uncertain"}
+
+##########################################################
+#create_news_benchmark
+##########################################################
+DEFAULT_OUTPUT_PATH = os.path.join(RESULTS_DIR, "news_benchmark_review.csv")
+DEFAULT_EXCEL_OUTPUT_PATH = os.path.join(RESULTS_DIR, "news_benchmark_review.xlsx")
+
+
+
+
+CSV_COLUMNS = [
+    "benchmark_event_number",
+    "disaster_id",
+    "country",
+    "region",
+    "disaster_type",
+    "start_date",
+    "latitude",
+    "longitude",
+    "news_engine_version",
+    "total_articles_for_event",
+    "sources_successfully_resolved",
+    "article_index",
+    "source",
+    "title",
+    "url",
+    "raw_text",
+    "relevance_score",
+    "relevance_threshold",
+    "confidence",
+    "is_non_article_candidate",
+    "relevance_reasons",
+    "relevance_penalties",
+    "search_query",
+    "query_precision",
+    "published_at",
+    "manual_label",
+    "manual_notes",
+]
+

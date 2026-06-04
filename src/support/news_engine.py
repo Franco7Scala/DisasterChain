@@ -812,32 +812,6 @@ def deduplicate(articles):
     return unique
 
 
-SOURCE_RELEVANCE_THRESHOLDS = {
-    "ReliefWeb": 4,
-    "ReliefWeb Disasters": 4,
-    "ReliefWeb Updates": 4,
-    "GDACS": 4,
-    "NASA EONET": 4,
-    "NASA Earth Observatory/EONET": 4,
-    "IFRC GO": 4,
-    "ERCC Copernicus": 4,
-    "ERCC portal": 4,
-    "WMO": 4,
-    "FloodList": 5,
-    "ADRC Asia": 4,
-    "AHA Centre": 4,
-    "Africa Hazards Watch": 4,
-    "ReliefWeb Africa": 4,
-    "PAHO": 4,
-    "NOAA Climate Report": 5,
-    "CIMA Research": 4,
-    "MeteoAlarm": 4,
-    "Wikipedia": 7,
-    "Google News": 6,
-    "DuckDuckGo": 7,
-}
-
-
 def _source_threshold(source_name, default_threshold):
     source_name = str(source_name or "")
     for prefix, threshold in SOURCE_RELEVANCE_THRESHOLDS.items():
@@ -859,10 +833,65 @@ def _article_relevance_threshold(article, default_threshold):
     return threshold
 
 
+def _is_non_article_result(article):
+    title = str(article.get("title", ""))
+    url = str(article.get("url", ""))
+    return (
+        any(pat.search(url) for pat in NON_ARTICLE_URL_RE)
+        or any(pat.search(title) for pat in NON_ARTICLE_TITLE_RE)
+    )
+
+
+def _article_confidence(article, scoring, threshold):
+    if article.get("is_non_article_candidate"):
+        return "low"
+
+    source = str(article.get("source", ""))
+    score = scoring["score"]
+    reasons = set(scoring.get("reasons", []))
+    penalties = set(scoring.get("penalties", []))
+
+    strong_reasons = {
+        "event_name_in_title",
+        "event_name_in_text",
+        "local_place_in_title",
+        "publication_date_near_event",
+    }
+    risky_penalties = {
+        "missing_local_or_event_context",
+        "generic_title",
+        "different_year_in_title",
+        "publication_date_far_from_event",
+    }
+
+    if score >= threshold + 4 and reasons & strong_reasons and not penalties:
+        return "high"
+
+    if source.startswith(("ReliefWeb", "GDACS", "IFRC GO", "FloodList")):
+        if score >= threshold + 2 and not (penalties & risky_penalties):
+            return "high"
+        return "medium"
+
+    if source.startswith(("Google News", "DuckDuckGo", "Wikipedia")):
+        if penalties & risky_penalties:
+            return "low"
+        if score >= threshold + 3 and reasons & strong_reasons:
+            return "high"
+        return "medium"
+
+    if penalties & risky_penalties:
+        return "low"
+    if score >= threshold + 3:
+        return "high"
+    return "medium"
+
+
 def filter_and_score_articles(articles, country, start_date, disaster_type,
                               location_context=None):
     scored_articles = []
     for article in articles:
+        is_non_article = _is_non_article_result(article)
+
         scoring = score_relevance(
             title=article.get("title", ""),
             text=article.get("raw_text", ""),
@@ -877,16 +906,23 @@ def filter_and_score_articles(articles, country, start_date, disaster_type,
             continue
 
         enriched = dict(article)
+        if is_non_article:
+            enriched["is_non_article_candidate"] = True
         enriched["relevance_score"] = scoring["score"]
         enriched["relevance_threshold"] = threshold
         enriched["relevance_reasons"] = scoring["reasons"]
+        enriched["confidence"] = _article_confidence(enriched, scoring, threshold)
         if scoring["penalties"]:
             enriched["relevance_penalties"] = scoring["penalties"]
         scored_articles.append(enriched)
 
+    confidence_rank = {"high": 3, "medium": 2, "low": 1}
     return sorted(
         deduplicate(scored_articles),
-        key=lambda item: item.get("relevance_score", 0),
+        key=lambda item: (
+            confidence_rank.get(item.get("confidence", "low"), 0),
+            item.get("relevance_score", 0),
+        ),
         reverse=True,
     )
 
