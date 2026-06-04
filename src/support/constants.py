@@ -232,3 +232,8 @@ CSV_COLUMNS = [
     "manual_notes",
 ]
 
+##########################################################
+#analyze_news_sources
+##########################################################
+DEFAULT_REPORT_PATH = os.path.join(RESULTS_DIR, "news_source_statistics.txt")
+DEFAULT_CSV_PATH = os.path.join(RESULTS_DIR, "news_source_statistics.csv")
