@@ -1,0 +1,37 @@
+NEWS SOURCE STATISTICS
+======================================================================
+Total events: 500
+Events with news: 300
+Success rate: 60.00%
+Total articles: 864
+Sources with at least one article: 10
+
+Articles by source
+----------------------------------------------------------------------
+ReliefWeb Disasters: articles=320, events=232, confidence high/medium/low/missing=0/0/320/0, non_article_candidates=320, avg_score=6.91
+Google News: articles=307, events=119, confidence high/medium/low/missing=106/46/155/0, non_article_candidates=0, avg_score=8.23
+Wikipedia: articles=146, events=98, confidence high/medium/low/missing=63/55/28/0, non_article_candidates=22, avg_score=10.09
+ReliefWeb: articles=23, events=13, confidence high/medium/low/missing=11/12/0/0, non_article_candidates=0, avg_score=6.74
+NASA EONET: articles=22, events=17, confidence high/medium/low/missing=7/0/15/0, non_article_candidates=0, avg_score=6.14
+IFRC GO: articles=22, events=8, confidence high/medium/low/missing=4/18/0/0, non_article_candidates=0, avg_score=5.95
+FloodList: articles=14, events=7, confidence high/medium/low/missing=5/9/0/0, non_article_candidates=0, avg_score=8.21
+WMO (World Meteorological Organization WMO): articles=6, events=6, confidence high/medium/low/missing=1/0/5/0, non_article_candidates=0, avg_score=4.83
+DuckDuckGo: articles=3, events=1, confidence high/medium/low/missing=0/2/1/0, non_article_candidates=0, avg_score=6.67
+WMO (WMO Severe Weather Information Centre): articles=1, events=1, confidence high/medium/low/missing=0/0/1/0, non_article_candidates=0, avg_score=4.0
+
+Queried source counts
+----------------------------------------------------------------------
+ADPC/AHA Centre: queried_for_events=500
+Africa Hazards Watch/SADRI: queried_for_events=500
+CIMA Research Foundation/MeteoAlarm: queried_for_events=500
+DuckDuckGo: queried_for_events=201
+ERCC portal: queried_for_events=500
+FloodList: queried_for_events=500
+GDACS: queried_for_events=500
+Google News RSS: queried_for_events=500
+IFRC GO: queried_for_events=500
+NASA Earth Observatory/EONET: queried_for_events=500
+PAHO/NOAA: queried_for_events=500
+ReliefWeb: queried_for_events=500
+WMO: queried_for_events=500
+Wikipedia: queried_for_events=500
