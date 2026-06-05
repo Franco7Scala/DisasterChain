@@ -42,7 +42,7 @@ NASA_POWER_DAILY_URL = "https://power.larc.nasa.gov/api/temporal/daily/point"
 #########################################################
 
 # Version 
-NEWS_ENGINE_VERSION = "8.9-confidence-non-article-flag"
+NEWS_ENGINE_VERSION = "8.10-direct-source-dedup"
 
 # Headers
 HEADERS = {
@@ -180,6 +180,24 @@ SOURCE_RELEVANCE_THRESHOLDS = {
     "Google News": 6,
     "DuckDuckGo": 7,
 }
+
+
+DIRECT_SOURCE_PRIORITY = {
+    "FloodList": 100,
+    "ReliefWeb": 95,
+    "ReliefWeb Disasters": 94,
+    "ReliefWeb Updates": 94,
+    "IFRC GO": 90,
+    "NASA EONET": 88,
+    "NASA Earth Observatory/EONET": 88,
+    "GDACS": 86,
+    "WMO": 84,
+    "Wikipedia": 70,
+    "Google News": 30,
+    "DuckDuckGo": 20,
+}
+
+
 
 
 

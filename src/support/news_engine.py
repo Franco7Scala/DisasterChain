@@ -812,6 +812,101 @@ def deduplicate(articles):
     return unique
 
 
+def _source_family(source):
+    source = str(source or "")
+    google_match = re.match(r"Google News \((.*?)\)", source)
+    if google_match:
+        return google_match.group(1).strip()
+    for prefix in DIRECT_SOURCE_PRIORITY:
+        if source.startswith(prefix):
+            return prefix
+    return source
+
+
+def _source_priority(source):
+    source = str(source or "")
+    if source.startswith("Google News"):
+        return DIRECT_SOURCE_PRIORITY["Google News"]
+    family = _source_family(source)
+    for prefix, priority in DIRECT_SOURCE_PRIORITY.items():
+        if family.startswith(prefix):
+            return priority
+    return 50
+
+
+def _canonical_title(title):
+    title = clean_html(title)
+    title = re.sub(r"\s*[-|]\s*[^-|]{3,60}$", "", title)
+    title = re.sub(r"[^a-z0-9]+", " ", title.lower())
+    return re.sub(r"\s+", " ", title).strip()
+
+
+def _article_identity_keys(article):
+    title_key = _canonical_title(article.get("title", ""))
+    source_family = _source_family(article.get("source", "")).lower()
+    keys = []
+    if title_key:
+        keys.append(("title", title_key))
+        if source_family:
+            keys.append(("source_title", source_family, title_key))
+
+    url = str(article.get("url", "")).strip().rstrip("/")
+    if url and "news.google.com/rss/articles/" not in url:
+        keys.append(("url", url.lower()))
+
+    return keys
+
+
+def deduplicate_prefer_direct_sources(articles):
+    by_key = {}
+    output = []
+    direct_source_families = {
+        _source_family(article.get("source", "")).lower()
+        for article in articles
+        if not str(article.get("source", "")).startswith("Google News")
+    }
+
+    def article_rank(article):
+        confidence_rank = {"high": 3, "medium": 2, "low": 1}
+        return (
+            _source_priority(article.get("source", "")),
+            confidence_rank.get(article.get("confidence", "low"), 0),
+            article.get("relevance_score", 0),
+        )
+
+    for article in articles:
+        source = str(article.get("source", ""))
+        source_family = _source_family(source).lower()
+        if source.startswith("Google News") and source_family in direct_source_families:
+            continue
+
+        keys = _article_identity_keys(article)
+        matching_indexes = [
+            by_key[key] for key in keys
+            if key in by_key
+        ]
+        if not matching_indexes:
+            output.append(article)
+            index = len(output) - 1
+            for key in keys:
+                by_key[key] = index
+            continue
+
+        index = matching_indexes[0]
+        current = output[index]
+        if article_rank(article) > article_rank(current):
+            replacement = dict(article)
+            replacement["deduplicated_from"] = current.get("source", "")
+            output[index] = replacement
+            for key in keys:
+                by_key[key] = index
+        else:
+            output[index].setdefault("deduplicated_sources", [])
+            output[index]["deduplicated_sources"].append(article.get("source", ""))
+
+    return output
+
+
 def _source_threshold(source_name, default_threshold):
     source_name = str(source_name or "")
     for prefix, threshold in SOURCE_RELEVANCE_THRESHOLDS.items():
@@ -993,7 +1088,7 @@ def get_all_news_sources(disaster_type, country, start_date, region, lat, lon,
         }
         articles.extend(found)
 
-    articles = deduplicate(articles)
+    articles = deduplicate_prefer_direct_sources(deduplicate(articles))
     duckduckgo_used = False
 
     if len(articles) == 0:
@@ -1021,7 +1116,7 @@ def get_all_news_sources(disaster_type, country, start_date, region, lat, lon,
             "articles_retrieved": len(ddg_articles),
             "articles": ddg_articles,
         }
-        articles = deduplicate(ddg_articles)
+        articles = deduplicate_prefer_direct_sources(deduplicate(ddg_articles))
     else:
         source_results["DuckDuckGo"] = {
             "queried": False,

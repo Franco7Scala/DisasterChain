@@ -37,6 +37,7 @@ def collect_source_stats(dataset):
         "low": 0,
         "missing_confidence": 0,
         "non_article_candidates": 0,
+        "deduplicated_sources": 0,
         "score_sum": 0.0,
         "score_count": 0,
     })
@@ -83,6 +84,12 @@ def collect_source_stats(dataset):
             if article.get("is_non_article_candidate"):
                 source_stats["non_article_candidates"] += 1
 
+            source_stats["deduplicated_sources"] += len(
+                article.get("deduplicated_sources") or []
+            )
+            if article.get("deduplicated_from"):
+                source_stats["deduplicated_sources"] += 1
+
             score = article.get("relevance_score")
             if isinstance(score, (int, float)):
                 source_stats["score_sum"] += float(score)
@@ -104,6 +111,7 @@ def collect_source_stats(dataset):
             "low_confidence": source_stats["low"],
             "missing_confidence": source_stats["missing_confidence"],
             "non_article_candidates": source_stats["non_article_candidates"],
+            "deduplicated_sources": source_stats["deduplicated_sources"],
             "avg_relevance_score": round(avg_score, 2),
             "metadata_resolved_count": resolved_counts[source],
         })
@@ -142,6 +150,7 @@ def build_report(summary, rows):
             f"{row['high_confidence']}/{row['medium_confidence']}/"
             f"{row['low_confidence']}/{row['missing_confidence']}, "
             f"non_article_candidates={row['non_article_candidates']}, "
+            f"deduplicated_sources={row['deduplicated_sources']}, "
             f"avg_score={row['avg_relevance_score']}"
         )
     lines.append("")
@@ -165,6 +174,7 @@ def write_csv(rows, path):
         "low_confidence",
         "missing_confidence",
         "non_article_candidates",
+        "deduplicated_sources",
         "avg_relevance_score",
         "metadata_resolved_count",
     ]
