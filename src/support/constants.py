@@ -27,7 +27,7 @@ WEATHER_VARIABLES = ["rain_sum", "snowfall_sum", "temperature_2m_max", "temperat
 # Execution Settings
 # Control variable. If True, run only on 500 events for testing. If False, run on all 52,000 events.
 IS_TEST_MODE = True
-TEST_LIMIT = 500
+TEST_LIMIT = 500 
 
 #Official appname for ReliefWeb API
 RELIEFWEB_APPNAME = "Unical-EnvironmentalCausalDataset-432353"
@@ -42,7 +42,7 @@ NASA_POWER_DAILY_URL = "https://power.larc.nasa.gov/api/temporal/daily/point"
 #########################################################
 
 # Version 
-NEWS_ENGINE_VERSION = "8.10-direct-source-dedup"
+NEWS_ENGINE_VERSION = "8.17-filter-generic-wikipedia"
 
 # Headers
 HEADERS = {
@@ -57,6 +57,13 @@ HEADERS = {
 HEADERS_JSON = {**HEADERS, "Accept": "application/json"}
 HEADERS_XML  = {**HEADERS, "Accept": "application/rss+xml,application/xml,text/xml"}
 FLOODLIST_SITEMAP_HEADERS = {"User-Agent": "Mozilla/5.0", "Accept": "*/*"}
+
+# Article text enrichment
+ENRICH_ARTICLE_RAW_TEXT = True
+ARTICLE_TEXT_TIMEOUT = 5
+ARTICLE_TEXT_MIN_CHARS = 500
+ARTICLE_TEXT_MAX_CHARS = 6000
+ARTICLE_TEXT_FETCH_LIMIT_PER_EVENT = 5
 
 # Utils
 MONTH_NAMES = {
@@ -237,6 +244,9 @@ CSV_COLUMNS = [
     "title",
     "url",
     "raw_text",
+    "raw_text_status",
+    "raw_text_length",
+    "raw_text_url",
     "relevance_score",
     "relevance_threshold",
     "confidence",

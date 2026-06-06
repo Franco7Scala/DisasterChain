@@ -12,8 +12,10 @@ Main behavior:
 
 import requests
 import urllib.parse
+import html as html_lib
 from datetime import datetime, timedelta
 from support.constants import *
+from support.extra import _resolve_and_extract_text as _extra_resolve_and_extract_text
 from difflib import SequenceMatcher
 import re
 import time
@@ -31,6 +33,10 @@ def get_date_window(start_date_str, days=21):
 
 def clean_html(text):
     return re.sub(r"<[^>]+>", "", str(text)).strip()
+
+
+def normalize_whitespace(text):
+    return re.sub(r"\s+", " ", str(text or "")).strip()
 
 def parse_date_parts(start_date):
     """Return (year, month_num, month_name, day) from a YYYY-MM-DD string."""
@@ -68,7 +74,7 @@ def days_from_event(pub_date_str, start_date):
 
 def make_article(source, title, url, raw_text):
     return {"source": source, "title": title.strip(),
-            "url": url, "raw_text": str(raw_text).strip()[:1000]}
+            "url": url, "raw_text": str(raw_text).strip()[:ARTICLE_TEXT_MAX_CHARS]}
 
 def log_source(source_name, count):
     """Log how many articles a source returned."""
@@ -144,8 +150,17 @@ def _google_news_rss(query, country, start_date, disaster_type,
 
         seen.add(norm)
         label = f"{source_label} ({source})" if source != source_label else source_label
-        results.append(make_article(label, title, link,
-                                    f"{title} [{source}, {pub}]"))
+        fallback_text = f"{title} [{source}, {pub}]"
+        final_link, full_text = _resolve_and_extract_text(
+            link,
+            fallback_text=fallback_text,
+        )
+        article = make_article(label, title, final_link, full_text)
+        if len(full_text) > len(fallback_text):
+            article["raw_text_status"] = "fetched_full_text"
+            article["raw_text_url"] = final_link
+            article["raw_text_length"] = len(article["raw_text"])
+        results.append(article)
         if len(results) >= max_results:
             break
 
@@ -907,6 +922,256 @@ def deduplicate_prefer_direct_sources(articles):
     return output
 
 
+def _extract_text_from_html(html_text):
+    html_text = str(html_text or "")
+    html_text = re.sub(r"(?is)<script.*?</script>", " ", html_text)
+    html_text = re.sub(r"(?is)<style.*?</style>", " ", html_text)
+    html_text = re.sub(r"(?is)<noscript.*?</noscript>", " ", html_text)
+    html_text = re.sub(r"(?is)<svg.*?</svg>", " ", html_text)
+    html_text = re.sub(r"(?is)<(nav|header|footer|aside|form)[^>]*>.*?</\1>", " ", html_text)
+
+    chunks = []
+    for pattern in [
+        r"(?is)<article[^>]*>(.*?)</article>",
+        r"(?is)<main[^>]*>(.*?)</main>",
+    ]:
+        chunks.extend(re.findall(pattern, html_text))
+
+    if not chunks:
+        chunks = re.findall(r"(?is)<p[^>]*>(.*?)</p>", html_text)
+
+    if not chunks:
+        chunks = re.findall(r"(?is)<div[^>]*>(.*?)</div>", html_text)
+
+    cleaned_chunks = []
+    for chunk in chunks:
+        chunk = re.sub(r"(?i)<br\s*/?>", " ", chunk)
+        chunk = re.sub(r"(?i)</(p|div|h[1-6]|li)>", " ", chunk)
+        text = html_lib.unescape(clean_html(chunk))
+        text = normalize_whitespace(text)
+        if len(text) >= 50:
+            cleaned_chunks.append(text)
+
+    return normalize_whitespace(" ".join(cleaned_chunks))
+
+
+def _article_text_fetch_allowed(article):
+    url = str(article.get("url", ""))
+    if not url.startswith("http"):
+        return False
+    if "news.google.com/rss/articles/" in url:
+        return False
+    if article.get("is_non_article_candidate"):
+        return False
+    if url.lower().endswith((".pdf", ".zip", ".jpg", ".jpeg", ".png")):
+        return False
+    return True
+
+
+def _is_consent_or_block_page(url, text):
+    url = str(url or "").lower()
+    text = normalize_whitespace(text).lower()
+    consent_markers = [
+        "consent.google.com",
+        "if you choose to accept all",
+        "if you choose to reject all",
+        "manage your privacy settings",
+        "we use cookies and data",
+        "before you continue",
+        "enable javascript and cookies",
+    ]
+    return any(marker in url or marker in text for marker in consent_markers)
+
+
+def enrich_article_raw_text(article):
+    enriched = dict(article)
+    current_text = normalize_whitespace(enriched.get("raw_text", ""))
+    enriched["raw_text_length"] = len(current_text)
+
+    if enriched.get("raw_text_status") == "fetched_full_text":
+        return enriched
+
+    if not ENRICH_ARTICLE_RAW_TEXT:
+        enriched["raw_text_status"] = "disabled"
+        return enriched
+
+    if not _article_text_fetch_allowed(enriched):
+        if "news.google.com/rss/articles/" in str(enriched.get("url", "")):
+            enriched["raw_text_status"] = "skipped_google_news_redirect"
+        else:
+            enriched["raw_text_status"] = "skipped"
+        return enriched
+
+    response = safe_get(
+        enriched.get("url", ""),
+        headers=HEADERS,
+        timeout=ARTICLE_TEXT_TIMEOUT,
+        retries=0,
+    )
+    if response is None:
+        enriched["raw_text_status"] = "fetch_failed"
+        return enriched
+
+    if _is_consent_or_block_page(response.url, response.text):
+        enriched["raw_text_status"] = "blocked_or_consent_page"
+        return enriched
+
+    content_type = response.headers.get("Content-Type", "").lower()
+    if "html" not in content_type and "text" not in content_type:
+        enriched["raw_text_status"] = "unsupported_content_type"
+        return enriched
+
+    extracted_text = _extract_text_from_html(response.text)
+    if _is_consent_or_block_page(response.url, extracted_text):
+        enriched["raw_text_status"] = "blocked_or_consent_page"
+        return enriched
+
+    if len(extracted_text) < ARTICLE_TEXT_MIN_CHARS or len(extracted_text) <= len(current_text):
+        enriched["raw_text_status"] = "kept_original"
+        return enriched
+
+    enriched["raw_text"] = extracted_text[:ARTICLE_TEXT_MAX_CHARS]
+    enriched["raw_text_length"] = len(enriched["raw_text"])
+    enriched["raw_text_status"] = "fetched_full_text"
+    enriched["raw_text_url"] = response.url
+    return enriched
+
+
+def _resolve_and_extract_text(url, fallback_text=""):
+    try:
+        final_url, extracted_text = _extra_resolve_and_extract_text(
+            url,
+            fallback_text=fallback_text,
+        )
+        if (
+            extracted_text
+            and len(extracted_text) > len(normalize_whitespace(fallback_text))
+            and not _is_consent_or_block_page(final_url, extracted_text)
+        ):
+            return final_url, extracted_text[:ARTICLE_TEXT_MAX_CHARS]
+    except Exception:
+        pass
+
+    response = safe_get(
+        url,
+        headers=HEADERS,
+        timeout=ARTICLE_TEXT_TIMEOUT,
+        retries=0,
+    )
+    if response is None:
+        return url, fallback_text
+
+    if _is_consent_or_block_page(response.url, response.text):
+        return url, fallback_text
+
+    content_type = response.headers.get("Content-Type", "").lower()
+    if "html" not in content_type and "text" not in content_type:
+        return url, fallback_text
+
+    extracted_text = _extract_text_from_html(response.text)
+    if len(extracted_text) > len(normalize_whitespace(fallback_text)):
+        return response.url, extracted_text[:ARTICLE_TEXT_MAX_CHARS]
+
+    return url, fallback_text
+
+
+def enrich_final_articles_raw_text(articles):
+    enriched_articles = []
+    fetched = 0
+
+    for article in articles:
+        if fetched >= ARTICLE_TEXT_FETCH_LIMIT_PER_EVENT:
+            skipped = dict(article)
+            skipped["raw_text_length"] = len(normalize_whitespace(skipped.get("raw_text", "")))
+            skipped["raw_text_status"] = "skipped_fetch_limit"
+            enriched_articles.append(skipped)
+            continue
+
+        enriched = enrich_article_raw_text(article)
+        if enriched.get("raw_text_status") in {
+            "fetched_full_text",
+            "fetch_failed",
+            "kept_original",
+            "unsupported_content_type",
+        }:
+            fetched += 1
+        enriched_articles.append(enriched)
+
+    return enriched_articles
+
+
+def _is_weak_google_news_final_article(article):
+    source = str(article.get("source", ""))
+    if not source.startswith("Google News"):
+        return False
+
+    penalties = set(article.get("relevance_penalties") or [])
+    raw_text_status = article.get("raw_text_status")
+    has_full_text = raw_text_status == "fetched_full_text"
+
+    if article.get("confidence") == "low":
+        return True
+
+    if (
+        not has_full_text
+        and "missing_local_or_event_context" in penalties
+    ):
+        return True
+
+    return False
+
+
+def _is_generic_wikipedia_final_article(article):
+    if str(article.get("source", "")) != "Wikipedia":
+        return False
+
+    title = normalize_whitespace(article.get("title", "")).lower()
+    url = str(article.get("url", "")).lower()
+    penalties = set(article.get("relevance_penalties") or [])
+
+    generic_title_prefixes = (
+        "list of ",
+        "timeline of ",
+        "index of ",
+        "outline of ",
+    )
+    generic_url_markers = (
+        "/list_of_",
+        "/timeline_of_",
+        "/category:",
+    )
+
+    if title.startswith(generic_title_prefixes):
+        return True
+
+    if any(marker in url for marker in generic_url_markers):
+        return True
+
+    if (
+        article.get("confidence") == "low"
+        and "missing_local_or_event_context" in penalties
+    ):
+        return True
+
+    return False
+
+
+def filter_final_articles_for_precision(articles):
+    kept = []
+    removed = []
+
+    for article in articles:
+        if (
+            _is_weak_google_news_final_article(article)
+            or _is_generic_wikipedia_final_article(article)
+        ):
+            removed.append(article)
+        else:
+            kept.append(article)
+
+    return kept, removed
+
+
 def _source_threshold(source_name, default_threshold):
     source_name = str(source_name or "")
     for prefix, threshold in SOURCE_RELEVANCE_THRESHOLDS.items():
@@ -1124,6 +1389,8 @@ def get_all_news_sources(disaster_type, country, start_date, region, lat, lon,
             "articles": [],
         }
 
+    articles = enrich_final_articles_raw_text(articles)
+    articles, filtered_articles = filter_final_articles_for_precision(articles)
     resolved = sorted(set(a["source"] for a in articles))
 
     return {
@@ -1135,6 +1402,15 @@ def get_all_news_sources(disaster_type, country, start_date, region, lat, lon,
             "total_articles_retrieved": len(articles),
             "sources_successfully_resolved": resolved,
             "source_errors": source_errors,
+            "final_articles_filtered": len(filtered_articles),
+            "filtered_google_news_articles": len([
+                article for article in filtered_articles
+                if str(article.get("source", "")).startswith("Google News")
+            ]),
+            "filtered_wikipedia_articles": len([
+                article for article in filtered_articles
+                if str(article.get("source", "")) == "Wikipedia"
+            ]),
             "news_engine_version": NEWS_ENGINE_VERSION,
             "timestamp": datetime.utcnow().isoformat() + "Z",
         },
@@ -1254,10 +1530,26 @@ def query_reliefweb(disaster_type, country, start_date,
                     source = "ReliefWeb"
                 else:
                     title = fields.get("name", "")
-                    body = clean_html(fields.get("description", "") or title)
+                    raw_desc = fields.get("description", "") or title
+                    body = clean_html(raw_desc)
                     url = fields.get("url", "https://reliefweb.int/disasters")
                     pub = (fields.get("date") or {}).get("event", "")
                     source = "ReliefWeb Disasters"
+
+                    if "taxonomy/term" in url or "node/" in raw_desc or "report/" in raw_desc:
+                        links = re.findall(
+                            r"https://reliefweb\.int/(?:report|node)/[^\s\)\"\]]+",
+                            raw_desc,
+                        )
+                        if links:
+                            report_url = links[0].rstrip(").,")
+                            final_link, full_text = _resolve_and_extract_text(
+                                report_url,
+                                fallback_text=body,
+                            )
+                            if len(full_text) > len(body):
+                                body = full_text
+                                url = final_link
 
                 key = (source, title.lower(), url.rstrip("/"))
                 if key in seen:

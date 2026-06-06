@@ -38,6 +38,12 @@ def collect_source_stats(dataset):
         "missing_confidence": 0,
         "non_article_candidates": 0,
         "deduplicated_sources": 0,
+        "raw_text_fetched": 0,
+        "raw_text_kept_original": 0,
+        "raw_text_fetch_failed": 0,
+        "raw_text_skipped_google_news": 0,
+        "raw_text_blocked_or_consent": 0,
+        "raw_text_other_status": 0,
         "score_sum": 0.0,
         "score_count": 0,
     })
@@ -90,6 +96,20 @@ def collect_source_stats(dataset):
             if article.get("deduplicated_from"):
                 source_stats["deduplicated_sources"] += 1
 
+            raw_text_status = article.get("raw_text_status")
+            if raw_text_status == "fetched_full_text":
+                source_stats["raw_text_fetched"] += 1
+            elif raw_text_status == "kept_original":
+                source_stats["raw_text_kept_original"] += 1
+            elif raw_text_status == "fetch_failed":
+                source_stats["raw_text_fetch_failed"] += 1
+            elif raw_text_status == "skipped_google_news_redirect":
+                source_stats["raw_text_skipped_google_news"] += 1
+            elif raw_text_status == "blocked_or_consent_page":
+                source_stats["raw_text_blocked_or_consent"] += 1
+            elif raw_text_status:
+                source_stats["raw_text_other_status"] += 1
+
             score = article.get("relevance_score")
             if isinstance(score, (int, float)):
                 source_stats["score_sum"] += float(score)
@@ -112,6 +132,12 @@ def collect_source_stats(dataset):
             "missing_confidence": source_stats["missing_confidence"],
             "non_article_candidates": source_stats["non_article_candidates"],
             "deduplicated_sources": source_stats["deduplicated_sources"],
+            "raw_text_fetched": source_stats["raw_text_fetched"],
+            "raw_text_kept_original": source_stats["raw_text_kept_original"],
+            "raw_text_fetch_failed": source_stats["raw_text_fetch_failed"],
+            "raw_text_skipped_google_news": source_stats["raw_text_skipped_google_news"],
+            "raw_text_blocked_or_consent": source_stats["raw_text_blocked_or_consent"],
+            "raw_text_other_status": source_stats["raw_text_other_status"],
             "avg_relevance_score": round(avg_score, 2),
             "metadata_resolved_count": resolved_counts[source],
         })
@@ -151,6 +177,10 @@ def build_report(summary, rows):
             f"{row['low_confidence']}/{row['missing_confidence']}, "
             f"non_article_candidates={row['non_article_candidates']}, "
             f"deduplicated_sources={row['deduplicated_sources']}, "
+            f"raw_text fetched/kept/failed/gnews/blocked/other="
+            f"{row['raw_text_fetched']}/{row['raw_text_kept_original']}/"
+            f"{row['raw_text_fetch_failed']}/{row['raw_text_skipped_google_news']}/"
+            f"{row['raw_text_blocked_or_consent']}/{row['raw_text_other_status']}, "
             f"avg_score={row['avg_relevance_score']}"
         )
     lines.append("")
@@ -175,6 +205,12 @@ def write_csv(rows, path):
         "missing_confidence",
         "non_article_candidates",
         "deduplicated_sources",
+        "raw_text_fetched",
+        "raw_text_kept_original",
+        "raw_text_fetch_failed",
+        "raw_text_skipped_google_news",
+        "raw_text_blocked_or_consent",
+        "raw_text_other_status",
         "avg_relevance_score",
         "metadata_resolved_count",
     ]

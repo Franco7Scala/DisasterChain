@@ -1,10 +1,11 @@
-﻿source,articles,events_with_articles,high_confidence,medium_confidence,low_confidence,missing_confidence,non_article_candidates,deduplicated_sources,avg_relevance_score,metadata_resolved_count
-ReliefWeb Disasters,312,230,0,0,312,0,312,10,6.9,230
-Google News,272,105,87,42,143,0,0,1,8.0,258
-Wikipedia,141,99,59,55,27,0,20,0,10.01,99
-IFRC GO,22,8,4,18,0,0,0,0,5.95,8
-ReliefWeb,22,13,10,12,0,0,0,4,6.68,13
-NASA EONET,20,15,7,0,13,0,0,0,6.35,15
-FloodList,14,7,5,9,0,0,0,0,8.21,7
-WMO (World Meteorological Organization WMO),6,6,1,0,5,0,0,0,4.83,6
-WMO (WMO Severe Weather Information Centre),1,1,0,0,1,0,0,0,4.0,1
+﻿source,articles,events_with_articles,high_confidence,medium_confidence,low_confidence,missing_confidence,non_article_candidates,deduplicated_sources,raw_text_fetched,raw_text_kept_original,raw_text_fetch_failed,raw_text_skipped_google_news,raw_text_blocked_or_consent,raw_text_other_status,avg_relevance_score,metadata_resolved_count
+ReliefWeb Disasters,317,237,54,60,203,0,203,13,96,18,0,0,0,203,7.04,237
+Wikipedia,132,94,64,67,1,0,0,0,132,0,0,0,0,0,9.99,94
+Google News,132,72,91,41,0,0,0,0,0,0,0,129,0,3,10.19,126
+ReliefWeb,23,13,12,11,0,0,0,2,13,10,0,0,0,0,6.96,13
+IFRC GO,22,8,4,18,0,0,0,0,0,17,0,0,0,5,5.95,8
+NASA EONET,21,16,7,0,14,0,0,0,0,0,0,0,0,21,6.24,16
+FloodList,15,8,5,10,0,0,0,0,0,0,10,1,0,4,8.07,8
+WMO (World Meteorological Organization WMO),6,6,1,0,5,0,0,0,0,0,0,4,0,2,4.83,6
+DuckDuckGo,3,2,0,3,0,0,0,0,1,0,2,0,0,0,6.67,2
+WMO (WMO Severe Weather Information Centre),1,1,0,0,1,0,0,0,0,0,0,1,0,0,4.0,1
