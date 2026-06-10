@@ -85,6 +85,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--window-days", type=int, default=10)
     parser.add_argument("--image-size", type=int, default=768)
     parser.add_argument("--max-cloud-cover", type=float, default=30.0)
+    parser.add_argument("--s2-cloud-eval-size", type=int, default=128)
+    parser.add_argument("--s2-cloud-candidate-limit", type=int, default=8)
     parser.add_argument("--s2-water-threshold", type=float, default=0.0)
     return parser.parse_args()
 
@@ -97,6 +99,8 @@ def main() -> None:
         window_days=args.window_days,
         image_size=args.image_size,
         max_cloud_cover=args.max_cloud_cover,
+        s2_cloud_eval_size=args.s2_cloud_eval_size,
+        s2_cloud_candidate_limit=args.s2_cloud_candidate_limit,
         s2_water_threshold=args.s2_water_threshold,
     )
 

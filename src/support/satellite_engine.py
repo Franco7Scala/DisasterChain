@@ -4,6 +4,7 @@ import os
 import re
 from dataclasses import asdict, dataclass
 from datetime import datetime, timedelta
+from io import BytesIO
 from pathlib import Path
 from typing import Dict, Iterable, List, Optional, Tuple
 
@@ -40,6 +41,9 @@ class SceneSelection:
     item_id: str
     datetime: str
     cloud_cover: Optional[float] = None
+    local_cloud_cover: Optional[float] = None
+    local_nodata_percent: Optional[float] = None
+    local_valid_percent: Optional[float] = None
     polarization: Optional[str] = None
     instrument_mode: Optional[str] = None
 
@@ -50,6 +54,8 @@ class SatelliteRunConfig:
     window_days: int = 10
     image_size: int = 768
     max_cloud_cover: float = 30.0
+    s2_cloud_eval_size: int = 128
+    s2_cloud_candidate_limit: int = 8
     s2_water_threshold: float = 0.0
     timeout_seconds: int = 90
 
@@ -187,6 +193,16 @@ class SentinelHubClient:
         self._raise_api_error(response, f"Process request for {output_path.name}")
         output_path.write_bytes(response.content)
 
+    def process_bytes(self, payload: Dict, accept: str, context: str) -> bytes:
+        response = self.session.post(
+            PROCESS_URL,
+            json=payload,
+            headers=self._headers(accept=accept),
+            timeout=self.timeout_seconds,
+        )
+        self._raise_api_error(response, context)
+        return response.content
+
 
 def cql_eq(property_name: str, value: str) -> Dict:
     return {"op": "eq", "args": [{"property": property_name}, value]}
@@ -267,6 +283,8 @@ def select_s2_scene(
     target_date: str,
     period: str,
     max_cloud_cover: float,
+    cloud_eval_size: int,
+    cloud_candidate_limit: int,
 ) -> Optional[SceneSelection]:
     items = client.catalog_search(
         "sentinel-2-l2a",
@@ -284,14 +302,40 @@ def select_s2_scene(
     if not candidates:
         return None
 
-    def score(item: Dict) -> Tuple[float, int]:
+    def tile_score(item: Dict) -> Tuple[float, int]:
         cloud = item.get("properties", {}).get("eo:cloud_cover")
         return (
             float(cloud) if cloud is not None else 100.0,
             _distance_days(item, target_date),
         )
 
-    selected = sorted(candidates, key=score)[0]
+    ranked_candidates = sorted(candidates, key=tile_score)
+    evaluated = []
+    for item in ranked_candidates[: max(1, cloud_candidate_limit)]:
+        try:
+            local_cloud = estimate_s2_local_cloud(
+                client,
+                item,
+                bbox,
+                max(16, cloud_eval_size),
+            )
+            evaluated.append((local_cloud, item))
+        except SentinelHubRequestError:
+            continue
+
+    if evaluated:
+        local_cloud, selected = sorted(
+            evaluated,
+            key=lambda entry: (
+                entry[0]["cloud_percent"],
+                _distance_days(entry[1], target_date),
+                tile_score(entry[1])[0],
+            ),
+        )[0]
+    else:
+        local_cloud = None
+        selected = ranked_candidates[0]
+
     properties = selected.get("properties", {})
     cloud_cover = properties.get("eo:cloud_cover")
     return SceneSelection(
@@ -300,6 +344,15 @@ def select_s2_scene(
         item_id=selected.get("id", ""),
         datetime=properties.get("datetime", ""),
         cloud_cover=float(cloud_cover) if cloud_cover is not None else None,
+        local_cloud_cover=(
+            local_cloud["cloud_percent"] if local_cloud is not None else None
+        ),
+        local_nodata_percent=(
+            local_cloud["nodata_percent"] if local_cloud is not None else None
+        ),
+        local_valid_percent=(
+            local_cloud["valid_percent"] if local_cloud is not None else None
+        ),
     )
 
 
@@ -399,6 +452,31 @@ function isCloudOrShadow(scl) {
 """
 
 
+S2_LOCAL_CLOUD_EVALSCRIPT = """
+//VERSION=3
+function setup() {
+  return {
+    input: ["SCL", "dataMask"],
+    output: { id: "default", bands: 3, sampleType: "AUTO" }
+  };
+}
+
+function evaluatePixel(sample) {
+  if (sample.dataMask === 0) {
+    return [0, 0, 0];
+  }
+  if (isCloudOrShadow(sample.SCL)) {
+    return [1, 1, 1];
+  }
+  return [0.55, 0.55, 0.55];
+}
+
+function isCloudOrShadow(scl) {
+  return [3, 8, 9, 10, 11].includes(scl);
+}
+"""
+
+
 def process_payload(
     collection: str,
     bbox: List[float],
@@ -443,6 +521,64 @@ def process_payload(
             ],
         },
         "evalscript": evalscript,
+    }
+
+
+def estimate_s2_local_cloud(
+    client: SentinelHubClient,
+    scene_item: Dict,
+    bbox: List[float],
+    image_size: int,
+) -> Dict[str, float]:
+    try:
+        import numpy as np
+        from PIL import Image
+    except ImportError as exc:
+        raise RuntimeError(
+            "Pillow and numpy are required to estimate Sentinel-2 local cloud cover."
+        ) from exc
+
+    scene_datetime = _scene_datetime(scene_item)
+    time_from, time_to = day_range(scene_datetime)
+    payload = process_payload(
+        "sentinel-2-l2a",
+        bbox,
+        time_from,
+        time_to,
+        S2_LOCAL_CLOUD_EVALSCRIPT,
+        image_size,
+        "image/png",
+        data_filter={
+            "maxCloudCoverage": 100,
+            "mosaickingOrder": "leastCC",
+        },
+        processing={"upsampling": "NEAREST", "downsampling": "NEAREST"},
+    )
+    content = client.process_bytes(
+        payload,
+        accept="image/png",
+        context=f"Local cloud evaluation for {scene_item.get('id', 'unknown')}",
+    )
+    pixels = np.asarray(Image.open(BytesIO(content)).convert("RGB"))
+    red = pixels[:, :, 0]
+    green = pixels[:, :, 1]
+    blue = pixels[:, :, 2]
+
+    cloud = (red > 240) & (green > 240) & (blue > 240)
+    nodata = (red < 5) & (green < 5) & (blue < 5)
+    valid = ~nodata
+
+    total_pixels = pixels.shape[0] * pixels.shape[1]
+    valid_pixels = int(valid.sum())
+    cloud_pixels = int((cloud & valid).sum())
+    nodata_pixels = int(nodata.sum())
+
+    return {
+        "cloud_percent": (
+            round((cloud_pixels / valid_pixels) * 100, 4) if valid_pixels else 100.0
+        ),
+        "nodata_percent": round((nodata_pixels / total_pixels) * 100, 4),
+        "valid_percent": round((valid_pixels / total_pixels) * 100, 4),
     }
 
 
@@ -681,6 +817,8 @@ def run_satellite_event(
         event.start_date,
         "pre",
         config.max_cloud_cover,
+        config.s2_cloud_eval_size,
+        config.s2_cloud_candidate_limit,
     )
     s2_post = select_s2_scene(
         client,
@@ -690,6 +828,8 @@ def run_satellite_event(
         event.start_date,
         "post",
         config.max_cloud_cover,
+        config.s2_cloud_eval_size,
+        config.s2_cloud_candidate_limit,
     )
 
     outputs: Dict[str, str] = {}
@@ -782,6 +922,8 @@ def summarize_selected_scenes(scenes: Iterable[Optional[SceneSelection]]) -> Lis
         label = f"{scene.collection} {scene.period}: {scene.datetime}"
         if scene.cloud_cover is not None:
             label += f" cloud={scene.cloud_cover:.1f}%"
+        if scene.local_cloud_cover is not None:
+            label += f" local_cloud={scene.local_cloud_cover:.1f}%"
         if scene.polarization:
             label += f" pol={scene.polarization}"
         lines.append(f"- {label}")
