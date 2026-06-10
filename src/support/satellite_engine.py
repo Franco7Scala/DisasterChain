@@ -56,6 +56,7 @@ class SatelliteRunConfig:
     max_cloud_cover: float = 30.0
     s2_cloud_eval_size: int = 128
     s2_cloud_candidate_limit: int = 8
+    s2_usable_local_cloud_cover: float = 30.0
     s2_water_threshold: float = 0.0
     timeout_seconds: int = 90
 
@@ -788,6 +789,78 @@ def compute_output_statistics(outputs: Dict[str, str], bbox: List[float]) -> Dic
     return statistics
 
 
+def _s2_scene_usable(
+    scene: Optional[SceneSelection],
+    usable_local_cloud_cover: float,
+) -> bool:
+    if scene is None:
+        return False
+    if scene.local_cloud_cover is None:
+        return False
+    return scene.local_cloud_cover <= usable_local_cloud_cover
+
+
+def build_quality_assessment(
+    s1_pre: Optional[SceneSelection],
+    s1_post: Optional[SceneSelection],
+    s2_pre: Optional[SceneSelection],
+    s2_post: Optional[SceneSelection],
+    outputs: Dict[str, str],
+    config: SatelliteRunConfig,
+) -> Dict:
+    s1_change_available = (
+        s1_pre is not None
+        and s1_post is not None
+        and "s1_change_mask_png" in outputs
+    )
+    s2_pre_usable = _s2_scene_usable(
+        s2_pre,
+        config.s2_usable_local_cloud_cover,
+    )
+    s2_post_usable = _s2_scene_usable(
+        s2_post,
+        config.s2_usable_local_cloud_cover,
+    )
+    s2_change_detection_usable = s2_pre_usable and s2_post_usable
+
+    if s2_change_detection_usable and s1_change_available:
+        recommended = "sentinel-1-and-sentinel-2"
+    elif s1_change_available:
+        recommended = "sentinel-1"
+    elif s2_post_usable:
+        recommended = "sentinel-2-post-event"
+    else:
+        recommended = "manual-review"
+
+    return {
+        "thresholds": {
+            "s2_usable_local_cloud_cover": config.s2_usable_local_cloud_cover,
+        },
+        "s1_change_detection_available": s1_change_available,
+        "s2_pre_usable": s2_pre_usable,
+        "s2_post_usable": s2_post_usable,
+        "s2_change_detection_usable": s2_change_detection_usable,
+        "recommended_primary_layer": recommended,
+        "reasons": {
+            "s2_pre": (
+                "usable"
+                if s2_pre_usable
+                else "missing or local cloud cover above threshold"
+            ),
+            "s2_post": (
+                "usable"
+                if s2_post_usable
+                else "missing or local cloud cover above threshold"
+            ),
+            "s1": (
+                "pre/post change mask available"
+                if s1_change_available
+                else "missing pre/post radar pair or change mask"
+            ),
+        },
+    }
+
+
 def _scene_asdict(scene: Optional[SceneSelection]) -> Optional[Dict]:
     return asdict(scene) if scene else None
 
@@ -878,6 +951,15 @@ def run_satellite_event(
             }
         )
 
+    quality = build_quality_assessment(
+        s1_pre,
+        s1_post,
+        s2_pre,
+        s2_post,
+        outputs,
+        config,
+    )
+
     manifest = {
         "event": asdict(event),
         "config": asdict(config),
@@ -894,6 +976,7 @@ def run_satellite_event(
         },
         "outputs": outputs,
         "statistics": compute_output_statistics(outputs, bbox),
+        "quality": quality,
         "notes": {
             "s1_change_mask": (
                 "Blue pixels are candidate radar darkening areas from VV backscatter. "
