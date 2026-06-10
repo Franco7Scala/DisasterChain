@@ -569,6 +569,89 @@ def build_s1_change_mask(pre_path: Path, post_path: Path, output_path: Path) -> 
     Image.fromarray(mask).save(output_path)
 
 
+def bbox_area_km2(bbox: List[float]) -> float:
+    west, south, east, north = bbox
+    avg_latitude = (south + north) / 2
+    width_km = (
+        abs(east - west)
+        * 111.32
+        * max(math.cos(math.radians(avg_latitude)), 0.01)
+    )
+    height_km = abs(north - south) * 111.32
+    return width_km * height_km
+
+
+def _class_stats(count: int, total: int, pixel_area_km2: float) -> Dict:
+    return {
+        "pixels": int(count),
+        "percent": round((count / total) * 100, 4) if total else 0.0,
+        "area_km2": round(count * pixel_area_km2, 4),
+    }
+
+
+def compute_mask_statistics(mask_path: Path, bbox: List[float], candidate_label: str) -> Dict:
+    try:
+        import numpy as np
+        from PIL import Image
+    except ImportError as exc:
+        raise RuntimeError(
+            "Pillow and numpy are required to compute satellite mask statistics."
+        ) from exc
+
+    image = Image.open(mask_path).convert("RGB")
+    pixels = np.asarray(image)
+    height, width, _ = pixels.shape
+    total = width * height
+    pixel_area_km2 = bbox_area_km2(bbox) / total if total else 0.0
+
+    red = pixels[:, :, 0]
+    green = pixels[:, :, 1]
+    blue = pixels[:, :, 2]
+
+    candidate = (blue > 200) & (red < 30) & (green < 140)
+    cloud_or_shadow = (red > 240) & (green > 240) & (blue > 240)
+    nodata = (red < 5) & (green < 5) & (blue < 5)
+    other = ~(candidate | cloud_or_shadow | nodata)
+
+    candidate_count = int(candidate.sum())
+    cloud_count = int(cloud_or_shadow.sum())
+    nodata_count = int(nodata.sum())
+    other_count = int(other.sum())
+
+    return {
+        "source": str(mask_path),
+        "width": width,
+        "height": height,
+        "total_pixels": total,
+        "bbox_area_km2": round(bbox_area_km2(bbox), 4),
+        "pixel_area_km2": round(pixel_area_km2, 8),
+        "classes": {
+            candidate_label: _class_stats(candidate_count, total, pixel_area_km2),
+            "cloud_or_shadow": _class_stats(cloud_count, total, pixel_area_km2),
+            "nodata": _class_stats(nodata_count, total, pixel_area_km2),
+            "other": _class_stats(other_count, total, pixel_area_km2),
+        },
+    }
+
+
+def compute_output_statistics(outputs: Dict[str, str], bbox: List[float]) -> Dict[str, Dict]:
+    statistics = {}
+    for output_name, output_path in outputs.items():
+        if output_name == "s1_change_mask_png":
+            statistics[output_name] = compute_mask_statistics(
+                Path(output_path),
+                bbox,
+                "candidate_radar_change",
+            )
+        elif output_name.endswith("mndwi_mask_png"):
+            statistics[output_name] = compute_mask_statistics(
+                Path(output_path),
+                bbox,
+                "candidate_water",
+            )
+    return statistics
+
+
 def _scene_asdict(scene: Optional[SceneSelection]) -> Optional[Dict]:
     return asdict(scene) if scene else None
 
@@ -670,6 +753,7 @@ def run_satellite_event(
             "s2_post": _scene_asdict(s2_post),
         },
         "outputs": outputs,
+        "statistics": compute_output_statistics(outputs, bbox),
         "notes": {
             "s1_change_mask": (
                 "Blue pixels are candidate radar darkening areas from VV backscatter. "
