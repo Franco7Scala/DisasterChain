@@ -16,4 +16,24 @@ This pipeline is designed to be fully automated, modular, and resilient. However
 To execute the entire dataset compilation, weather data fetching, and causal aggregation loop, simply run the main script from the root directory:
 
 ```bash
-python main.py
+python src/main.py
+```
+
+### Satellite Event Extraction
+
+Set Copernicus Data Space Sentinel Hub credentials in the environment:
+
+```bash
+export COPERNICUS_CLIENT_ID="<client-id>"
+export COPERNICUS_CLIENT_SECRET="<client-secret>"
+```
+
+Then run a first flood-event extraction from the generated disaster CSV:
+
+```bash
+python src/fetch_satellite_event.py --event-id 2018-0040-BRA
+```
+
+Outputs are written to `results/satellite/<event-id>/`. See
+`docs/cluster_and_satellite.md` for the cluster/JupyterLab setup and satellite
+workflow.

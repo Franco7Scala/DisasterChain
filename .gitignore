@@ -8,6 +8,7 @@ __pycache__/
 
 #Data files
 data/
+results/satellite/
 
 # Distribution / packaging
 .Python

@@ -38,6 +38,21 @@ NASA_POWER_DAILY_URL = "https://power.larc.nasa.gov/api/temporal/daily/point"
 
 
 #########################################################
+#satellite_engine
+#########################################################
+
+# Copernicus Data Space Ecosystem / Sentinel Hub endpoints.
+COPERNICUS_AUTH_URL = (
+    "https://identity.dataspace.copernicus.eu/auth/realms/CDSE/"
+    "protocol/openid-connect/token"
+)
+SENTINEL_HUB_BASE_URL = "https://sh.dataspace.copernicus.eu"
+CATALOG_SEARCH_URL = f"{SENTINEL_HUB_BASE_URL}/catalog/v1/search"
+PROCESS_URL = f"{SENTINEL_HUB_BASE_URL}/process/v1"
+SATELLITE_OUTPUT_DIR = os.path.join(RESULTS_DIR, "satellite")
+
+
+#########################################################
 #news_engine
 #########################################################
 
