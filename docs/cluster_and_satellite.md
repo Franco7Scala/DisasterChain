@@ -209,7 +209,10 @@ python src/rank_satellite_events.py --top 10
 
 The ranking script writes `results/satellite/ranked_events.csv` and highlights
 events with usable Sentinel-1/Sentinel-2 change layers, low local cloud cover,
-and larger candidate new-water area.
+and larger candidate new-water area. When manifest and mask files are available,
+it also penalizes unreliable cloud/nodata pixels and candidate new water that is
+mostly adjacent to persistent water, because those cases are often coastline,
+river-edge, tide, or registration artefacts rather than clear flood extent.
 
 ## What The First Version Does
 
