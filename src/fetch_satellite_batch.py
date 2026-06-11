@@ -33,11 +33,13 @@ SUMMARY_FIELDS = [
     "s2_pre_usable",
     "s2_post_usable",
     "s2_change_detection_usable",
+    "s2_water_change_mask_available",
     "s2_pre_local_cloud_cover",
     "s2_post_local_cloud_cover",
     "s1_candidate_area_km2",
     "s2_pre_candidate_water_area_km2",
     "s2_post_candidate_water_area_km2",
+    "s2_candidate_new_water_area_km2",
     "output_count",
     "elapsed_seconds",
     "error",
@@ -255,6 +257,9 @@ def summary_row(
         "s2_pre_usable": quality.get("s2_pre_usable", ""),
         "s2_post_usable": quality.get("s2_post_usable", ""),
         "s2_change_detection_usable": quality.get("s2_change_detection_usable", ""),
+        "s2_water_change_mask_available": quality.get(
+            "s2_water_change_mask_available", ""
+        ),
         "s2_pre_local_cloud_cover": nested_get(
             scenes,
             ["s2_pre", "local_cloud_cover"],
@@ -290,15 +295,40 @@ def summary_row(
                 "area_km2",
             ],
         ),
+        "s2_candidate_new_water_area_km2": nested_get(
+            statistics,
+            [
+                "s2_water_change_mask_png",
+                "classes",
+                "candidate_new_water",
+                "area_km2",
+            ],
+        ),
         "output_count": len(manifest.get("outputs", {})),
         "elapsed_seconds": round(elapsed_seconds, 2),
         "error": error,
     }
 
 
+def summary_header_matches(path: Path) -> bool:
+    if not path.exists():
+        return True
+    with path.open(newline="", encoding="utf-8") as handle:
+        reader = csv.reader(handle)
+        header = next(reader, [])
+    return header == SUMMARY_FIELDS
+
+
 def append_summary(summary_path: str, row: Dict[str, object]) -> None:
     path = Path(summary_path)
     path.parent.mkdir(parents=True, exist_ok=True)
+    if path.exists() and not summary_header_matches(path):
+        archived_path = path.with_name(
+            f"{path.stem}_{datetime.now().strftime('%Y%m%d_%H%M%S')}{path.suffix}"
+        )
+        path.replace(archived_path)
+        print(f"Archived old summary with outdated columns: {archived_path}")
+
     write_header = not path.exists()
     with path.open("a", newline="", encoding="utf-8") as handle:
         writer = csv.DictWriter(handle, fieldnames=SUMMARY_FIELDS)

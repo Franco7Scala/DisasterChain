@@ -34,7 +34,9 @@ Then run a first flood-event extraction from the generated disaster CSV:
 python src/fetch_satellite_event.py --event-id 2018-0040-BRA
 ```
 
-Outputs are written to `results/satellite/<event-id>/`. See
+Outputs are written to `results/satellite/<event-id>/`. When both Sentinel-2
+pre/post scenes are locally usable, the run also creates
+`s2_water_change_mask.png` for candidate new water after the event. See
 `docs/cluster_and_satellite.md` for the cluster/JupyterLab setup and satellite
 workflow.
 

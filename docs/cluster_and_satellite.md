@@ -143,6 +143,8 @@ Expected files include:
 - `s2_post_true_color.png`
 - `s2_post_mndwi_mask.png`
 - `s2_post_water_indices.tiff`
+- `s2_water_change_mask.png` when both Sentinel-2 scenes pass the local cloud
+  usability threshold
 - `manifest.json`
 
 Manual event example:
@@ -186,7 +188,8 @@ The batch runner:
 - skips an event if `results/satellite/<event-id>/manifest.json` already exists;
 - use `--force` only when you intentionally want to overwrite an existing event
   extraction;
-- appends one row per event to `results/satellite/batch_summary.csv`.
+- appends one row per event to `results/satellite/batch_summary.csv`, including
+  S2 new-water area when the water-change mask is available.
 
 Useful variants:
 
@@ -215,6 +218,11 @@ Sentinel-2:
 - saves true-color RGB PNGs;
 - saves MNDWI water-mask PNGs;
 - saves MNDWI, NDWI, and dataMask bands in a GeoTIFF.
+- when both pre/post scenes are locally usable, saves a water-change PNG where:
+  - blue means candidate new post-event water;
+  - teal means persistent water;
+  - orange means water present only before the event;
+  - white/black means unreliable cloud/nodata pixels.
 
 The generated masks are first-pass candidates for inspection, not final validated
 flood labels.

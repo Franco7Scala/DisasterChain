@@ -706,6 +706,56 @@ def build_s1_change_mask(pre_path: Path, post_path: Path, output_path: Path) -> 
     Image.fromarray(mask).save(output_path)
 
 
+def _water_mask_classes(pixels):
+    red = pixels[:, :, 0]
+    green = pixels[:, :, 1]
+    blue = pixels[:, :, 2]
+
+    water = (blue > 200) & (red < 30) & (green < 140)
+    cloud_or_shadow = (red > 240) & (green > 240) & (blue > 240)
+    nodata = (red < 5) & (green < 5) & (blue < 5)
+    return water, cloud_or_shadow, nodata
+
+
+def build_s2_water_change_mask(
+    pre_mask_path: Path,
+    post_mask_path: Path,
+    output_path: Path,
+) -> None:
+    try:
+        import numpy as np
+        from PIL import Image
+    except ImportError as exc:
+        raise RuntimeError(
+            "Pillow and numpy are required to build the Sentinel-2 water change mask."
+        ) from exc
+
+    pre = np.asarray(Image.open(pre_mask_path).convert("RGB"))
+    post = np.asarray(Image.open(post_mask_path).convert("RGB"))
+    if pre.shape != post.shape:
+        raise ValueError("Sentinel-2 pre/post water masks must have the same shape.")
+
+    pre_water, pre_cloud, pre_nodata = _water_mask_classes(pre)
+    post_water, post_cloud, post_nodata = _water_mask_classes(post)
+
+    cloudy = pre_cloud | post_cloud
+    nodata = pre_nodata | post_nodata
+    valid = ~(cloudy | nodata)
+
+    new_water = post_water & ~pre_water & valid
+    persistent_water = post_water & pre_water & valid
+    lost_water = pre_water & ~post_water & valid
+
+    mask = np.zeros_like(post)
+    mask[:, :, :] = [50, 50, 50]
+    mask[persistent_water] = [0, 120, 170]
+    mask[lost_water] = [160, 100, 0]
+    mask[new_water] = [0, 90, 255]
+    mask[cloudy] = [255, 255, 255]
+    mask[nodata] = [0, 0, 0]
+    Image.fromarray(mask).save(output_path)
+
+
 def bbox_area_km2(bbox: List[float]) -> float:
     west, south, east, north = bbox
     avg_latitude = (south + north) / 2
@@ -780,6 +830,12 @@ def compute_output_statistics(outputs: Dict[str, str], bbox: List[float]) -> Dic
                 bbox,
                 "candidate_radar_change",
             )
+        elif output_name == "s2_water_change_mask_png":
+            statistics[output_name] = compute_mask_statistics(
+                Path(output_path),
+                bbox,
+                "candidate_new_water",
+            )
         elif output_name.endswith("mndwi_mask_png"):
             statistics[output_name] = compute_mask_statistics(
                 Path(output_path),
@@ -822,9 +878,14 @@ def build_quality_assessment(
         config.s2_usable_local_cloud_cover,
     )
     s2_change_detection_usable = s2_pre_usable and s2_post_usable
+    s2_water_change_available = (
+        s2_change_detection_usable and "s2_water_change_mask_png" in outputs
+    )
 
     if s2_change_detection_usable and s1_change_available:
         recommended = "sentinel-1-and-sentinel-2"
+    elif s2_water_change_available:
+        recommended = "sentinel-2-change"
     elif s1_change_available:
         recommended = "sentinel-1"
     elif s2_post_usable:
@@ -840,6 +901,7 @@ def build_quality_assessment(
         "s2_pre_usable": s2_pre_usable,
         "s2_post_usable": s2_post_usable,
         "s2_change_detection_usable": s2_change_detection_usable,
+        "s2_water_change_mask_available": s2_water_change_available,
         "recommended_primary_layer": recommended,
         "reasons": {
             "s2_pre": (
@@ -856,6 +918,11 @@ def build_quality_assessment(
                 "pre/post change mask available"
                 if s1_change_available
                 else "missing pre/post radar pair or change mask"
+            ),
+            "s2_water_change": (
+                "water change mask available"
+                if s2_water_change_available
+                else "missing or Sentinel-2 pre/post not both usable"
             ),
         },
     }
@@ -959,6 +1026,26 @@ def run_satellite_event(
         outputs,
         config,
     )
+    if (
+        quality["s2_change_detection_usable"]
+        and "s2_pre_mndwi_mask_png" in outputs
+        and "s2_post_mndwi_mask_png" in outputs
+    ):
+        s2_change_path = output_root / "s2_water_change_mask.png"
+        build_s2_water_change_mask(
+            Path(outputs["s2_pre_mndwi_mask_png"]),
+            Path(outputs["s2_post_mndwi_mask_png"]),
+            s2_change_path,
+        )
+        outputs["s2_water_change_mask_png"] = str(s2_change_path)
+        quality = build_quality_assessment(
+            s1_pre,
+            s1_post,
+            s2_pre,
+            s2_post,
+            outputs,
+            config,
+        )
 
     manifest = {
         "event": asdict(event),
@@ -986,6 +1073,12 @@ def run_satellite_event(
                 "Blue pixels are MNDWI values above the configured threshold. "
                 "White pixels are clouds, cloud shadows, cirrus, or snow/ice "
                 "from the Sentinel-2 SCL band."
+            ),
+            "s2_water_change_mask": (
+                "Blue pixels are candidate new water in the post-event MNDWI mask. "
+                "Teal pixels are persistent water, orange pixels are water present "
+                "only before the event, white pixels are cloud/shadow/snow in either "
+                "scene, and black pixels are nodata."
             ),
         },
     }
