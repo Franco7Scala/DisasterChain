@@ -157,6 +157,47 @@ python src/fetch_satellite_event.py \
   --max-cloud-cover 30
 ```
 
+## Run A Small Satellite Batch
+
+Before launching API requests, inspect which events would be processed:
+
+```bash
+cd /users/<username>/projects/Tirocinio
+source /users/<username>/venvs/tirocinio/bin/activate
+source ~/.copernicus_env
+python src/fetch_satellite_batch.py --dry-run --limit 5
+```
+
+On the university cluster, a cautious first real batch is:
+
+```bash
+python src/fetch_satellite_batch.py \
+  --limit 3 \
+  --image-size 256 \
+  --max-cloud-cover 70 \
+  --window-days 30
+```
+
+The batch runner:
+
+- selects flood events from `results/disasters_per_satellite.csv`;
+- defaults to events from `2015-01-01` onward, because Sentinel-1/Sentinel-2
+  availability is useful from that period;
+- skips an event if `results/satellite/<event-id>/manifest.json` already exists;
+- use `--force` only when you intentionally want to overwrite an existing event
+  extraction;
+- appends one row per event to `results/satellite/batch_summary.csv`.
+
+Useful variants:
+
+```bash
+python src/fetch_satellite_batch.py --event-id 2016-0424-MEX --force
+python src/fetch_satellite_batch.py --country Mexico --limit 5 --image-size 256
+python src/fetch_satellite_batch.py --limit 0 --image-size 256 --sleep-seconds 2
+```
+
+Use `--limit 0` only after small runs look correct.
+
 ## What The First Version Does
 
 Sentinel-1:

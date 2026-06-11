@@ -37,3 +37,18 @@ python src/fetch_satellite_event.py --event-id 2018-0040-BRA
 Outputs are written to `results/satellite/<event-id>/`. See
 `docs/cluster_and_satellite.md` for the cluster/JupyterLab setup and satellite
 workflow.
+
+To inspect a small batch before making API calls:
+
+```bash
+python src/fetch_satellite_batch.py --dry-run --limit 5
+```
+
+To run a controlled batch on recent flood events:
+
+```bash
+python src/fetch_satellite_batch.py --limit 3 --image-size 256 --max-cloud-cover 70 --window-days 30
+```
+
+The batch runner skips events that already have a manifest unless `--force` is
+provided, and appends a compact summary to `results/satellite/batch_summary.csv`.
