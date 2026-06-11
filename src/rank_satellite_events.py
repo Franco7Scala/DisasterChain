@@ -33,6 +33,10 @@ RANK_FIELDS = [
 ]
 
 
+def display_value(value) -> str:
+    return "-" if value == "" or value is None else str(value)
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description=(
@@ -203,8 +207,8 @@ def print_summary(all_rows: List[Dict[str, str]], ranked: List[Dict[str, str]], 
     print()
     print("Top events:")
     for row in ranked[:top]:
-        area = row["s2_candidate_new_water_area_km2"] or "-"
-        cloud = row["max_s2_local_cloud_cover"] or "-"
+        area = display_value(row["s2_candidate_new_water_area_km2"])
+        cloud = display_value(row["max_s2_local_cloud_cover"])
         print(
             f"{row['rank']:>2}. {row['event_id']} | {row['country']} | "
             f"{row['rank_group']} | score={row['rank_score']} | "
