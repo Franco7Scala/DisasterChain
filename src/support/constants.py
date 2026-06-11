@@ -36,8 +36,9 @@ WEATHER_RETRY_STATUS_CODES = {429, 502, 503, 504}
 #URL for NASA Power Daily
 NASA_POWER_DAILY_URL = "https://power.larc.nasa.gov/api/temporal/daily/point"
 
-
+##################################################
 # Satellite engine
+##################################################
 COPERNICUS_AUTH_URL = (
     "https://identity.dataspace.copernicus.eu/auth/realms/CDSE/"
     "protocol/openid-connect/token"
