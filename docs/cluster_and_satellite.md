@@ -201,6 +201,16 @@ python src/fetch_satellite_batch.py --limit 0 --image-size 256 --sleep-seconds 2
 
 Use `--limit 0` only after small runs look correct.
 
+Rank the accumulated batch summary:
+
+```bash
+python src/rank_satellite_events.py --top 10
+```
+
+The ranking script writes `results/satellite/ranked_events.csv` and highlights
+events with usable Sentinel-1/Sentinel-2 change layers, low local cloud cover,
+and larger candidate new-water area.
+
 ## What The First Version Does
 
 Sentinel-1:
