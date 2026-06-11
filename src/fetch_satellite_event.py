@@ -3,15 +3,23 @@ import csv
 import os
 from typing import Dict, Optional
 
+from support.constants import (
+    CLEANED_DISASTERS_OUTPUT_PATH,
+    SATELLITE_DEFAULT_AOI_HALF_SIZE_KM,
+    SATELLITE_DEFAULT_IMAGE_SIZE,
+    SATELLITE_DEFAULT_MAX_CLOUD_COVER,
+    SATELLITE_DEFAULT_S2_CLOUD_CANDIDATE_LIMIT,
+    SATELLITE_DEFAULT_S2_CLOUD_EVAL_SIZE,
+    SATELLITE_DEFAULT_S2_USABLE_LOCAL_CLOUD_COVER,
+    SATELLITE_DEFAULT_S2_WATER_THRESHOLD,
+    SATELLITE_DEFAULT_WINDOW_DAYS,
+)
 from support.satellite_engine import (
     SATELLITE_OUTPUT_DIR,
     SatelliteEvent,
     SatelliteRunConfig,
     run_satellite_event,
 )
-
-
-DEFAULT_EVENTS_CSV = os.path.join("results", "disasters_per_satellite.csv")
 
 
 def load_event_from_csv(path: str, event_id: str) -> Optional[Dict[str, str]]:
@@ -73,7 +81,7 @@ def parse_args() -> argparse.Namespace:
         )
     )
     parser.add_argument("--event-id", help="EM-DAT disaster id, e.g. 2018-0040-BRA")
-    parser.add_argument("--events-csv", default=DEFAULT_EVENTS_CSV)
+    parser.add_argument("--events-csv", default=CLEANED_DISASTERS_OUTPUT_PATH)
     parser.add_argument("--lat", type=float, help="Manual latitude if event-id is not in CSV")
     parser.add_argument("--lon", type=float, help="Manual longitude if event-id is not in CSV")
     parser.add_argument("--start-date", help="Manual start date YYYY-MM-DD")
@@ -81,14 +89,38 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--disaster-type")
     parser.add_argument("--location")
     parser.add_argument("--output-dir", default=SATELLITE_OUTPUT_DIR)
-    parser.add_argument("--aoi-half-size-km", type=float, default=10.0)
-    parser.add_argument("--window-days", type=int, default=10)
-    parser.add_argument("--image-size", type=int, default=768)
-    parser.add_argument("--max-cloud-cover", type=float, default=30.0)
-    parser.add_argument("--s2-cloud-eval-size", type=int, default=128)
-    parser.add_argument("--s2-cloud-candidate-limit", type=int, default=8)
-    parser.add_argument("--s2-usable-local-cloud-cover", type=float, default=30.0)
-    parser.add_argument("--s2-water-threshold", type=float, default=0.0)
+    parser.add_argument(
+        "--aoi-half-size-km",
+        type=float,
+        default=SATELLITE_DEFAULT_AOI_HALF_SIZE_KM,
+    )
+    parser.add_argument("--window-days", type=int, default=SATELLITE_DEFAULT_WINDOW_DAYS)
+    parser.add_argument("--image-size", type=int, default=SATELLITE_DEFAULT_IMAGE_SIZE)
+    parser.add_argument(
+        "--max-cloud-cover",
+        type=float,
+        default=SATELLITE_DEFAULT_MAX_CLOUD_COVER,
+    )
+    parser.add_argument(
+        "--s2-cloud-eval-size",
+        type=int,
+        default=SATELLITE_DEFAULT_S2_CLOUD_EVAL_SIZE,
+    )
+    parser.add_argument(
+        "--s2-cloud-candidate-limit",
+        type=int,
+        default=SATELLITE_DEFAULT_S2_CLOUD_CANDIDATE_LIMIT,
+    )
+    parser.add_argument(
+        "--s2-usable-local-cloud-cover",
+        type=float,
+        default=SATELLITE_DEFAULT_S2_USABLE_LOCAL_CLOUD_COVER,
+    )
+    parser.add_argument(
+        "--s2-water-threshold",
+        type=float,
+        default=SATELLITE_DEFAULT_S2_WATER_THRESHOLD,
+    )
     return parser.parse_args()
 
 

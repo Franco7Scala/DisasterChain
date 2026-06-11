@@ -13,8 +13,34 @@ import requests
 from support.constants import (
     CATALOG_SEARCH_URL,
     COPERNICUS_AUTH_URL,
+    MASK_CANDIDATE_BLUE_MIN,
+    MASK_CANDIDATE_GREEN_MAX,
+    MASK_CANDIDATE_RED_MAX,
+    MASK_CLOUD_RGB_MIN,
+    MASK_COLOR_CANDIDATE,
+    MASK_COLOR_CLOUD,
+    MASK_COLOR_LOST_WATER,
+    MASK_COLOR_NODATA,
+    MASK_COLOR_PERSISTENT_WATER,
+    MASK_COLOR_S1_BACKGROUND,
+    MASK_COLOR_S2_BACKGROUND,
+    MASK_NODATA_RGB_MAX,
     PROCESS_URL,
+    S1_CHANGE_DARKENING_THRESHOLD,
+    S1_CHANGE_POST_VV_MAX,
+    S2_LOCAL_CLOUD_MAX_COVERAGE,
     SATELLITE_OUTPUT_DIR,
+    SATELLITE_DEFAULT_AOI_HALF_SIZE_KM,
+    SATELLITE_DEFAULT_IMAGE_SIZE,
+    SATELLITE_DEFAULT_MAX_CLOUD_COVER,
+    SATELLITE_DEFAULT_S2_CLOUD_CANDIDATE_LIMIT,
+    SATELLITE_DEFAULT_S2_CLOUD_EVAL_SIZE,
+    SATELLITE_DEFAULT_S2_USABLE_LOCAL_CLOUD_COVER,
+    SATELLITE_DEFAULT_S2_WATER_THRESHOLD,
+    SATELLITE_DEFAULT_TIMEOUT_SECONDS,
+    SATELLITE_DEFAULT_WINDOW_DAYS,
+    SENTINEL_API_ERROR_BODY_LIMIT,
+    SENTINEL_CATALOG_SEARCH_LIMIT,
 )
 ISO_FRACTION_RE = re.compile(r"(\.\d{1,6})(?=([+-]\d{2}:\d{2}|$))")
 
@@ -50,15 +76,15 @@ class SceneSelection:
 
 @dataclass
 class SatelliteRunConfig:
-    aoi_half_size_km: float = 10.0
-    window_days: int = 10
-    image_size: int = 768
-    max_cloud_cover: float = 30.0
-    s2_cloud_eval_size: int = 128
-    s2_cloud_candidate_limit: int = 8
-    s2_usable_local_cloud_cover: float = 30.0
-    s2_water_threshold: float = 0.0
-    timeout_seconds: int = 90
+    aoi_half_size_km: float = SATELLITE_DEFAULT_AOI_HALF_SIZE_KM
+    window_days: int = SATELLITE_DEFAULT_WINDOW_DAYS
+    image_size: int = SATELLITE_DEFAULT_IMAGE_SIZE
+    max_cloud_cover: float = SATELLITE_DEFAULT_MAX_CLOUD_COVER
+    s2_cloud_eval_size: int = SATELLITE_DEFAULT_S2_CLOUD_EVAL_SIZE
+    s2_cloud_candidate_limit: int = SATELLITE_DEFAULT_S2_CLOUD_CANDIDATE_LIMIT
+    s2_usable_local_cloud_cover: float = SATELLITE_DEFAULT_S2_USABLE_LOCAL_CLOUD_COVER
+    s2_water_threshold: float = SATELLITE_DEFAULT_S2_WATER_THRESHOLD
+    timeout_seconds: int = SATELLITE_DEFAULT_TIMEOUT_SECONDS
 
 
 def event_bbox(latitude: float, longitude: float, half_size_km: float) -> List[float]:
@@ -106,7 +132,12 @@ def require_copernicus_credentials() -> Tuple[str, str]:
 
 
 class SentinelHubClient:
-    def __init__(self, client_id: str, client_secret: str, timeout_seconds: int = 90):
+    def __init__(
+        self,
+        client_id: str,
+        client_secret: str,
+        timeout_seconds: int = SATELLITE_DEFAULT_TIMEOUT_SECONDS,
+    ):
         self.client_id = client_id
         self.client_secret = client_secret
         self.timeout_seconds = timeout_seconds
@@ -143,8 +174,8 @@ class SentinelHubClient:
             return
 
         body = response.text.strip()
-        if len(body) > 1200:
-            body = body[:1200] + "..."
+        if len(body) > SENTINEL_API_ERROR_BODY_LIMIT:
+            body = body[:SENTINEL_API_ERROR_BODY_LIMIT] + "..."
         raise SentinelHubRequestError(
             f"{context} failed with HTTP {response.status_code} "
             f"{response.reason}. Response body: {body or '<empty>'}"
@@ -253,7 +284,7 @@ def select_s1_scene(
         bbox,
         from_date,
         to_date,
-        limit=100,
+        limit=SENTINEL_CATALOG_SEARCH_LIMIT,
     )
     candidates = [
         item
@@ -292,7 +323,7 @@ def select_s2_scene(
         bbox,
         from_date,
         to_date,
-        limit=100,
+        limit=SENTINEL_CATALOG_SEARCH_LIMIT,
     )
     candidates = []
     for item in items:
@@ -550,7 +581,7 @@ def estimate_s2_local_cloud(
         image_size,
         "image/png",
         data_filter={
-            "maxCloudCoverage": 100,
+            "maxCloudCoverage": S2_LOCAL_CLOUD_MAX_COVERAGE,
             "mosaickingOrder": "leastCC",
         },
         processing={"upsampling": "NEAREST", "downsampling": "NEAREST"},
@@ -565,8 +596,12 @@ def estimate_s2_local_cloud(
     green = pixels[:, :, 1]
     blue = pixels[:, :, 2]
 
-    cloud = (red > 240) & (green > 240) & (blue > 240)
-    nodata = (red < 5) & (green < 5) & (blue < 5)
+    cloud = (red > MASK_CLOUD_RGB_MIN) & (green > MASK_CLOUD_RGB_MIN) & (
+        blue > MASK_CLOUD_RGB_MIN
+    )
+    nodata = (red < MASK_NODATA_RGB_MAX) & (green < MASK_NODATA_RGB_MAX) & (
+        blue < MASK_NODATA_RGB_MAX
+    )
     valid = ~nodata
 
     total_pixels = pixels.shape[0] * pixels.shape[1]
@@ -698,11 +733,15 @@ def build_s1_change_mask(pre_path: Path, post_path: Path, output_path: Path) -> 
     post_mask = post[:, :, 2] > 0
 
     darkening = pre_vv - post_vv
-    flood_like = (darkening > 35) & (post_vv < 85) & post_mask
+    flood_like = (
+        (darkening > S1_CHANGE_DARKENING_THRESHOLD)
+        & (post_vv < S1_CHANGE_POST_VV_MAX)
+        & post_mask
+    )
 
     mask = np.zeros((post.shape[0], post.shape[1], 3), dtype=np.uint8)
-    mask[:, :, :] = [40, 40, 40]
-    mask[flood_like] = [0, 90, 255]
+    mask[:, :, :] = MASK_COLOR_S1_BACKGROUND
+    mask[flood_like] = MASK_COLOR_CANDIDATE
     Image.fromarray(mask).save(output_path)
 
 
@@ -711,9 +750,21 @@ def _water_mask_classes(pixels):
     green = pixels[:, :, 1]
     blue = pixels[:, :, 2]
 
-    water = (blue > 200) & (red < 30) & (green < 140)
-    cloud_or_shadow = (red > 240) & (green > 240) & (blue > 240)
-    nodata = (red < 5) & (green < 5) & (blue < 5)
+    water = (
+        (blue > MASK_CANDIDATE_BLUE_MIN)
+        & (red < MASK_CANDIDATE_RED_MAX)
+        & (green < MASK_CANDIDATE_GREEN_MAX)
+    )
+    cloud_or_shadow = (
+        (red > MASK_CLOUD_RGB_MIN)
+        & (green > MASK_CLOUD_RGB_MIN)
+        & (blue > MASK_CLOUD_RGB_MIN)
+    )
+    nodata = (
+        (red < MASK_NODATA_RGB_MAX)
+        & (green < MASK_NODATA_RGB_MAX)
+        & (blue < MASK_NODATA_RGB_MAX)
+    )
     return water, cloud_or_shadow, nodata
 
 
@@ -747,12 +798,12 @@ def build_s2_water_change_mask(
     lost_water = pre_water & ~post_water & valid
 
     mask = np.zeros_like(post)
-    mask[:, :, :] = [50, 50, 50]
-    mask[persistent_water] = [0, 120, 170]
-    mask[lost_water] = [160, 100, 0]
-    mask[new_water] = [0, 90, 255]
-    mask[cloudy] = [255, 255, 255]
-    mask[nodata] = [0, 0, 0]
+    mask[:, :, :] = MASK_COLOR_S2_BACKGROUND
+    mask[persistent_water] = MASK_COLOR_PERSISTENT_WATER
+    mask[lost_water] = MASK_COLOR_LOST_WATER
+    mask[new_water] = MASK_COLOR_CANDIDATE
+    mask[cloudy] = MASK_COLOR_CLOUD
+    mask[nodata] = MASK_COLOR_NODATA
     Image.fromarray(mask).save(output_path)
 
 
@@ -795,9 +846,21 @@ def compute_mask_statistics(mask_path: Path, bbox: List[float], candidate_label:
     green = pixels[:, :, 1]
     blue = pixels[:, :, 2]
 
-    candidate = (blue > 200) & (red < 30) & (green < 140)
-    cloud_or_shadow = (red > 240) & (green > 240) & (blue > 240)
-    nodata = (red < 5) & (green < 5) & (blue < 5)
+    candidate = (
+        (blue > MASK_CANDIDATE_BLUE_MIN)
+        & (red < MASK_CANDIDATE_RED_MAX)
+        & (green < MASK_CANDIDATE_GREEN_MAX)
+    )
+    cloud_or_shadow = (
+        (red > MASK_CLOUD_RGB_MIN)
+        & (green > MASK_CLOUD_RGB_MIN)
+        & (blue > MASK_CLOUD_RGB_MIN)
+    )
+    nodata = (
+        (red < MASK_NODATA_RGB_MAX)
+        & (green < MASK_NODATA_RGB_MAX)
+        & (blue < MASK_NODATA_RGB_MAX)
+    )
     other = ~(candidate | cloud_or_shadow | nodata)
 
     candidate_count = int(candidate.sum())
