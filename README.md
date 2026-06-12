@@ -54,3 +54,18 @@ python src/fetch_satellite_batch.py --limit 3 --image-size 256 --max-cloud-cover
 
 The batch runner skips events that already have a manifest unless `--force` is
 provided, and appends a compact summary to `results/satellite/batch_summary.csv`.
+
+### Multimodal Satellite Base Layer
+
+The general multimodal satellite extraction is separate from the first flood
+mapping workflow. It saves general source layers for the fixed `D-10` to `D+10`
+window, without computing disaster-specific indices:
+
+```bash
+python src/fetch_multimodal_satellite_event.py --event-id 2018-0040-BRA --dry-run
+python src/fetch_multimodal_satellite_event.py --event-id 2018-0040-BRA
+```
+
+Outputs are written to `results/multimodal_satellite/<event-id>/` and include a
+daily manifest for Sentinel-2, Sentinel-1, Sentinel-3 SLSTR, and land cover when
+available. See `docs/multimodal_satellite_schema.md` for the target structure.

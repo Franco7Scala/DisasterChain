@@ -9,6 +9,7 @@ __pycache__/
 #Data files
 data/
 results/satellite/
+results/multimodal_satellite/
 docs/project_log.md
 results/news_benchmark_report.txt
 results/news_benchmark_review.xlsx

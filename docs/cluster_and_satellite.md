@@ -239,3 +239,43 @@ Sentinel-2:
 
 The generated masks are first-pass candidates for inspection, not final validated
 flood labels.
+
+## General Multimodal Satellite Layer
+
+The newer general-purpose workflow follows the multimodal dataset specification
+instead of the flood-specific pre/post mask workflow. It uses a fixed 21-day
+window (`D-10` to `D+10`) and tries to retrieve one scene per sensor per day.
+
+First inspect the plan without API calls:
+
+```bash
+python src/fetch_multimodal_satellite_event.py --event-id 2018-0040-BRA --dry-run
+```
+
+Then run one event:
+
+```bash
+python src/fetch_multimodal_satellite_event.py --event-id 2018-0040-BRA
+```
+
+Outputs are written under:
+
+```text
+results/multimodal_satellite/<event-id>/
+```
+
+The target structure is documented in:
+
+```text
+docs/multimodal_satellite_schema.md
+```
+
+This workflow saves general source layers:
+
+- Sentinel-2 true color, false color, and requested raw bands at 20 m;
+- Sentinel-1 VV/VH TIFF plus PNG preview;
+- Sentinel-3 SLSTR thermal source bands;
+- one land-cover TIFF for the event AOI.
+
+It intentionally does not generate MNDWI, NDVI, NBR, water-change masks, or
+other disaster-specific products.
