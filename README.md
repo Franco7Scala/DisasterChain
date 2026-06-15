@@ -69,3 +69,15 @@ python src/fetch_multimodal_satellite_event.py --event-id 2018-0040-BRA
 Outputs are written to `results/multimodal_satellite/<event-id>/` and include a
 daily manifest for Sentinel-2, Sentinel-1, Sentinel-3 SLSTR, and land cover when
 available. See `docs/multimodal_satellite_schema.md` for the target structure.
+
+To inspect a small multimodal batch before API calls:
+
+```bash
+python src/fetch_multimodal_satellite_batch.py --dry-run --limit 3
+```
+
+To run a controlled batch:
+
+```bash
+python src/fetch_multimodal_satellite_batch.py --limit 2
+```

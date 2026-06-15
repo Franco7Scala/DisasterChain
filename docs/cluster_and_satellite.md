@@ -279,3 +279,20 @@ This workflow saves general source layers:
 
 It intentionally does not generate MNDWI, NDVI, NBR, water-change masks, or
 other disaster-specific products.
+
+For a small multimodal batch dry-run:
+
+```bash
+python src/fetch_multimodal_satellite_batch.py --dry-run --limit 3
+```
+
+For a cautious real batch:
+
+```bash
+python src/fetch_multimodal_satellite_batch.py --limit 2
+```
+
+The batch script skips events that already have
+`results/multimodal_satellite/<event-id>/manifest.json`, unless `--force` is
+used, and writes a compact summary to
+`results/multimodal_satellite/batch_summary.csv`.
