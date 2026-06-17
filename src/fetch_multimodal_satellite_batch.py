@@ -46,6 +46,7 @@ SUMMARY_FIELDS = [
     "sentinel_3_slstr_missing_days",
     "land_cover_available",
     "land_cover_year",
+    "has_any_satellite_data",
     "output_file_count",
     "elapsed_seconds",
     "error",
@@ -82,8 +83,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--limit",
         type=int,
-        default=MULTIMODAL_BATCH_DEFAULT_LIMIT,
-        help="Maximum number of selected events. Use 0 to process all matches.",
+        default=None,
+        help=(
+            "Maximum number of selected events. Use 0 to process all matches. "
+            "Defaults to a small limit when events are selected by filters; "
+            "manual --event-id lists are not limited unless this is set."
+        ),
     )
     parser.add_argument("--output-dir", default=MULTIMODAL_SATELLITE_OUTPUT_DIR)
     parser.add_argument("--summary-csv", default=MULTIMODAL_BATCH_SUMMARY_CSV)
@@ -214,8 +219,17 @@ def select_events(args: argparse.Namespace) -> List[SatelliteEvent]:
                 continue
             selected_rows.append(row)
 
-    if args.limit > 0:
-        selected_rows = selected_rows[: args.limit]
+    if requested_ids:
+        limit = args.limit
+    else:
+        limit = (
+            MULTIMODAL_BATCH_DEFAULT_LIMIT
+            if args.limit is None
+            else args.limit
+        )
+
+    if limit is not None and limit > 0:
+        selected_rows = selected_rows[:limit]
 
     events = []
     for row in selected_rows:
@@ -271,6 +285,13 @@ def nested_get(data: Dict, path: Iterable[str], default=""):
     return current
 
 
+def has_any_satellite_data(available_days: Dict) -> bool:
+    return any(
+        int(available_days.get(sensor_name) or 0) > 0
+        for sensor_name in ["sentinel_2", "sentinel_1", "sentinel_3_slstr"]
+    )
+
+
 def summary_row(
     run_started_at: str,
     event: SatelliteEvent,
@@ -312,6 +333,7 @@ def summary_row(
         "sentinel_3_slstr_missing_days": missing_days.get("sentinel_3_slstr", ""),
         "land_cover_available": land_cover.get("available", ""),
         "land_cover_year": land_cover.get("year", ""),
+        "has_any_satellite_data": has_any_satellite_data(available_days),
         "output_file_count": count_output_files(manifest),
         "elapsed_seconds": round(elapsed_seconds, 2),
         "error": error,
@@ -346,13 +368,20 @@ def append_summary(summary_path: str, row: Dict[str, object]) -> None:
 
 
 def print_dry_run(events: List[SatelliteEvent], args: argparse.Namespace) -> None:
+    if args.event_ids and args.limit is None:
+        limit_label = "all requested event ids"
+    elif args.limit is None:
+        limit_label = MULTIMODAL_BATCH_DEFAULT_LIMIT
+    else:
+        limit_label = args.limit
+
     print(f"Dry run selected {len(events)} event(s). No API calls will be made.")
     print(
         "Filters: "
         f"disaster_type={args.disaster_type!r}, "
         f"country={args.country!r}, "
         f"min_start_date={args.min_start_date!r}, "
-        f"limit={args.limit}"
+        f"limit={limit_label!r}"
     )
     for index, event in enumerate(events, start=1):
         print(

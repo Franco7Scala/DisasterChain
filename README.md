@@ -81,3 +81,6 @@ To run a controlled batch:
 ```bash
 python src/fetch_multimodal_satellite_batch.py --limit 2
 ```
+
+When explicit `--event-id` values are provided, the full requested list is used
+unless `--limit` is also set.

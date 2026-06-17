@@ -296,3 +296,7 @@ The batch script skips events that already have
 `results/multimodal_satellite/<event-id>/manifest.json`, unless `--force` is
 used, and writes a compact summary to
 `results/multimodal_satellite/batch_summary.csv`.
+
+When an explicit list of `--event-id` values is provided, all requested events
+are selected by default. Use `--limit` only if you intentionally want to process
+just the first part of that list.
