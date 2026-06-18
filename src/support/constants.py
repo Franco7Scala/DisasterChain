@@ -46,6 +46,16 @@ COPERNICUS_AUTH_URL = (
 SENTINEL_HUB_BASE_URL = "https://sh.dataspace.copernicus.eu"
 CATALOG_SEARCH_URL = f"{SENTINEL_HUB_BASE_URL}/catalog/v1/search"
 PROCESS_URL = f"{SENTINEL_HUB_BASE_URL}/process/v1"
+SENTINEL_HUB_MAIN_AUTH_URL = (
+    "https://services.sentinel-hub.com/auth/realms/main/"
+    "protocol/openid-connect/token"
+)
+SENTINEL_HUB_USWEST_CATALOG_SEARCH_URL = (
+    "https://services-uswest2.sentinel-hub.com/api/v1/catalog/1.0.0/search"
+)
+SENTINEL_HUB_USWEST_PROCESS_URL = (
+    "https://services-uswest2.sentinel-hub.com/api/v1/process"
+)
 SATELLITE_OUTPUT_DIR = os.path.join(RESULTS_DIR, "satellite")
 SATELLITE_BATCH_SUMMARY_CSV = os.path.join(SATELLITE_OUTPUT_DIR, "batch_summary.csv")
 SATELLITE_RANKED_EVENTS_CSV = os.path.join(SATELLITE_OUTPUT_DIR, "ranked_events.csv")

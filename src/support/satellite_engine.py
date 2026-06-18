@@ -137,10 +137,16 @@ class SentinelHubClient:
         client_id: str,
         client_secret: str,
         timeout_seconds: int = SATELLITE_DEFAULT_TIMEOUT_SECONDS,
+        auth_url: str = COPERNICUS_AUTH_URL,
+        catalog_search_url: str = CATALOG_SEARCH_URL,
+        process_url: str = PROCESS_URL,
     ):
         self.client_id = client_id
         self.client_secret = client_secret
         self.timeout_seconds = timeout_seconds
+        self.auth_url = auth_url
+        self.catalog_search_url = catalog_search_url
+        self.process_url = process_url
         self.session = requests.Session()
         self._access_token = None
 
@@ -149,7 +155,7 @@ class SentinelHubClient:
             return self._access_token
 
         response = self.session.post(
-            COPERNICUS_AUTH_URL,
+            self.auth_url,
             data={
                 "grant_type": "client_credentials",
                 "client_id": self.client_id,
@@ -200,6 +206,8 @@ class SentinelHubClient:
                     "bbox",
                     "properties.datetime",
                     "properties.eo:cloud_cover",
+                    "properties.landsat:scene_id",
+                    "properties.landsat:collection_category",
                     "properties.s1:polarization",
                     "properties.sar:instrument_mode",
                 ]
@@ -207,7 +215,7 @@ class SentinelHubClient:
         }
 
         response = self.session.post(
-            CATALOG_SEARCH_URL,
+            self.catalog_search_url,
             json=payload,
             headers=self._headers(accept="application/geo+json, application/json"),
             timeout=self.timeout_seconds,
@@ -217,7 +225,7 @@ class SentinelHubClient:
 
     def process_image(self, payload: Dict, output_path: Path, accept: str) -> None:
         response = self.session.post(
-            PROCESS_URL,
+            self.process_url,
             json=payload,
             headers=self._headers(accept=accept),
             timeout=self.timeout_seconds,
@@ -227,7 +235,7 @@ class SentinelHubClient:
 
     def process_bytes(self, payload: Dict, accept: str, context: str) -> bytes:
         response = self.session.post(
-            PROCESS_URL,
+            self.process_url,
             json=payload,
             headers=self._headers(accept=accept),
             timeout=self.timeout_seconds,

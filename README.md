@@ -84,3 +84,11 @@ python src/fetch_multimodal_satellite_batch.py --limit 2
 
 When explicit `--event-id` values are provided, the full requested list is used
 unless `--limit` is also set.
+
+To check whether older Landsat collections can be reached before integrating
+them into the pipeline:
+
+```bash
+python src/probe_landsat_endpoint.py --event-id 2014-0317-USA --collection landsat-ot-l2 --dry-run
+python src/probe_landsat_endpoint.py --event-id 2014-0317-USA --collection landsat-ot-l2
+```

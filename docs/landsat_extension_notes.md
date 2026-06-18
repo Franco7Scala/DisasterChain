@@ -78,6 +78,21 @@ Before implementing a full batch layer:
 4. Only after that, add a standard Landsat folder under the multimodal output
    structure.
 
+The first probe command is intentionally catalog-only:
+
+```bash
+python src/probe_landsat_endpoint.py --event-id <event-id> --collection landsat-ot-l2
+```
+
+For a dry run without API calls:
+
+```bash
+python src/probe_landsat_endpoint.py --event-id <event-id> --collection landsat-ot-l2 --dry-run
+```
+
+If the US-West deployment rejects the current credentials, the script should
+fail before any pipeline integration work is attempted.
+
 Expected tentative structure:
 
 ```text
