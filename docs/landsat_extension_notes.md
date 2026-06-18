@@ -99,6 +99,29 @@ means the current Copernicus Data Space OAuth client is not valid for the
 general Sentinel Hub deployment. In that case, the next step is to create/use a
 Sentinel Hub OAuth client and set it as `SH_CLIENT_ID` and `SH_CLIENT_SECRET`.
 
+After a successful catalog probe, a small sample can be downloaded without
+touching the full multimodal batch pipeline:
+
+```bash
+python src/fetch_landsat_sample.py --event-id 2014-0317-USA --collection landsat-ot-l2
+```
+
+Initial sample outputs are written under:
+
+```text
+results/landsat_probe/<event_id>/<YYYY-MM-DD>/
+  manifest.json
+  true_color.tif
+  false_color.tif
+  raw_bands.tif
+  thermal_bands.tif
+  true_color_preview.png
+  false_color_preview.png
+```
+
+For Landsat 8-9 L2, `raw_bands.tif` currently stores `B01, B02, B03, B04, B05,
+B06, B07`, while `thermal_bands.tif` stores `B10`.
+
 Expected tentative structure:
 
 ```text

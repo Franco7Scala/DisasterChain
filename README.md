@@ -92,3 +92,10 @@ them into the pipeline:
 python src/probe_landsat_endpoint.py --event-id 2014-0317-USA --collection landsat-ot-l2 --dry-run
 python src/probe_landsat_endpoint.py --event-id 2014-0317-USA --collection landsat-ot-l2
 ```
+
+After the catalog probe succeeds, a small Landsat 8-9 L2 sample can be downloaded
+separately from the main pipeline:
+
+```bash
+python src/fetch_landsat_sample.py --event-id 2014-0317-USA --collection landsat-ot-l2
+```

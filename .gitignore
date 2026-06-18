@@ -10,6 +10,7 @@ __pycache__/
 data/
 results/satellite/
 results/multimodal_satellite/
+results/landsat_probe/
 docs/project_log.md
 results/news_benchmark_report.txt
 results/news_benchmark_review.xlsx
