@@ -93,6 +93,12 @@ python src/probe_landsat_endpoint.py --event-id <event-id> --collection landsat-
 If the US-West deployment rejects the current credentials, the script should
 fail before any pipeline integration work is attempted.
 
+A `401 Unauthorized` response from
+`https://services.sentinel-hub.com/auth/realms/main/protocol/openid-connect/token`
+means the current Copernicus Data Space OAuth client is not valid for the
+general Sentinel Hub deployment. In that case, the next step is to create/use a
+Sentinel Hub OAuth client and set it as `SH_CLIENT_ID` and `SH_CLIENT_SECRET`.
+
 Expected tentative structure:
 
 ```text

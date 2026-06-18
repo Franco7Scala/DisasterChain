@@ -163,7 +163,17 @@ class SentinelHubClient:
             },
             timeout=self.timeout_seconds,
         )
-        response.raise_for_status()
+        try:
+            response.raise_for_status()
+        except requests.HTTPError as exc:
+            body = response.text.strip()
+            if len(body) > SENTINEL_API_ERROR_BODY_LIMIT:
+                body = body[:SENTINEL_API_ERROR_BODY_LIMIT] + "..."
+            raise SentinelHubRequestError(
+                f"Token request failed with HTTP {response.status_code} "
+                f"{response.reason} for auth endpoint {self.auth_url}. "
+                f"Response body: {body or '<empty>'}"
+            ) from exc
         self._access_token = response.json()["access_token"]
         return self._access_token
 

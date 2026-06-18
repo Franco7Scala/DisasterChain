@@ -18,6 +18,7 @@ from support.constants import (
 from support.satellite_engine import (
     SatelliteEvent,
     SentinelHubClient,
+    SentinelHubRequestError,
     date_window,
     event_bbox,
 )
@@ -222,13 +223,22 @@ def main() -> None:
     )
 
     print_query(event, bbox, from_date, to_date, args, urls)
-    items = client.catalog_search(
-        args.collection,
-        bbox,
-        from_date,
-        to_date,
-        limit=args.limit,
-    )
+    try:
+        items = client.catalog_search(
+            args.collection,
+            bbox,
+            from_date,
+            to_date,
+            limit=args.limit,
+        )
+    except SentinelHubRequestError as exc:
+        raise SystemExit(
+            f"Landsat endpoint probe failed.\n{exc}\n\n"
+            "If this is a 401 on services.sentinel-hub.com, the current "
+            "Copernicus Data Space credentials are probably not valid for the "
+            "general Sentinel Hub deployment. Create/use Sentinel Hub OAuth "
+            "credentials and expose them as SH_CLIENT_ID and SH_CLIENT_SECRET."
+        ) from exc
     print_items(items)
 
 
