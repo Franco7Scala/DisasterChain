@@ -65,6 +65,15 @@ MULTIMODAL_BATCH_SUMMARY_CSV = os.path.join(
     "batch_summary.csv",
 )
 LANDSAT_PROBE_OUTPUT_DIR = os.path.join(RESULTS_DIR, "landsat_probe")
+RECENT_EMDAT_GEOCODING_OUTPUT_DIR = os.path.join(RESULTS_DIR, "recent_emdat_geocoding")
+RECENT_EMDAT_GEOCODING_CANDIDATES_CSV = os.path.join(
+    RECENT_EMDAT_GEOCODING_OUTPUT_DIR,
+    "candidates.csv",
+)
+RECENT_EMDAT_GEOCODING_SUMMARY_CSV = os.path.join(
+    RECENT_EMDAT_GEOCODING_OUTPUT_DIR,
+    "summary.csv",
+)
 
 SATELLITE_DEFAULT_AOI_HALF_SIZE_KM = 10.0
 SATELLITE_DEFAULT_WINDOW_DAYS = 10
