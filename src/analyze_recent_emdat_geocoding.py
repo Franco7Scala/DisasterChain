@@ -151,7 +151,16 @@ def parse_args() -> argparse.Namespace:
 
 def main() -> None:
     args = parse_args()
-    emdat = pd.read_excel(args.emdat_path)
+    emdat_path = Path(args.emdat_path)
+    if not emdat_path.exists():
+        raise SystemExit(
+            "EM-DAT input file not found.\n"
+            f"Expected path: {emdat_path}\n\n"
+            "Raw data files are not tracked by Git. Copy the EM-DAT Excel file "
+            "to the cluster data/ folder or pass its path with --emdat-path."
+        )
+
+    emdat = pd.read_excel(emdat_path)
 
     rows = []
     cutoff = pd.Timestamp(args.start_date)
