@@ -7,6 +7,7 @@ import pandas as pd
 
 from support.constants import (
     EMDAT_INPUT_PATH,
+    RECENT_EMDAT_ADMIN_UNITS_CSV,
     RECENT_EMDAT_GEOCODING_CANDIDATES_CSV,
     RECENT_EMDAT_GEOCODING_SUMMARY_CSV,
 )
@@ -39,6 +40,89 @@ def compact_json_text(value) -> str:
                 names.append(str(name))
                 break
     return " | ".join(names) if names else text
+
+
+def load_json_list(value) -> List[Dict]:
+    if not has_text(value):
+        return []
+    try:
+        parsed = json.loads(str(value).strip())
+    except (json.JSONDecodeError, TypeError):
+        return []
+    return parsed if isinstance(parsed, list) else []
+
+
+def unit_from_gadm_item(item: Dict) -> Dict:
+    for level in (3, 2, 1):
+        gid = item.get(f"gid_{level}")
+        name = item.get(f"name_{level}")
+        if gid or name:
+            return {
+                "unit_level": level,
+                "unit_id": gid or "",
+                "unit_name": name or "",
+                "migration_method": item.get("migration_method") or "",
+            }
+    return {
+        "unit_level": "",
+        "unit_id": "",
+        "unit_name": "",
+        "migration_method": item.get("migration_method") or "",
+    }
+
+
+def unit_from_admin_item(item: Dict) -> Dict:
+    for level in (3, 2, 1):
+        code = item.get(f"adm{level}_code")
+        name = item.get(f"adm{level}_name")
+        if code or name:
+            return {
+                "unit_level": level,
+                "unit_id": code or "",
+                "unit_name": name or "",
+                "migration_method": "",
+            }
+    return {"unit_level": "", "unit_id": "", "unit_name": "", "migration_method": ""}
+
+
+def admin_unit_rows(row: pd.Series) -> List[Dict]:
+    start_date = build_start_date(row)
+    base = {
+        "emdat_disaster_id": row["DisNo."],
+        "disaster_type": row.get("Disaster Type"),
+        "country": row.get("Country"),
+        "iso": row.get("ISO"),
+        "start_date": start_date.strftime("%Y-%m-%d") if start_date is not None else "",
+        "has_direct_coordinates": pd.notna(row["Latitude"]) and pd.notna(row["Longitude"]),
+        "location": row.get("Location") if has_text(row.get("Location")) else "",
+    }
+
+    rows = []
+    seen = set()
+    for source_field, parser, source_priority in [
+        ("GADM Admin Units", unit_from_gadm_item, 1),
+        ("Admin Units", unit_from_admin_item, 2),
+    ]:
+        for item in load_json_list(row.get(source_field)):
+            unit = parser(item)
+            key = (
+                source_field,
+                str(unit.get("unit_level")),
+                str(unit.get("unit_id")),
+                str(unit.get("unit_name")),
+            )
+            if key in seen:
+                continue
+            seen.add(key)
+            rows.append(
+                {
+                    **base,
+                    "source_field": source_field,
+                    "source_priority": source_priority,
+                    **unit,
+                }
+            )
+    return rows
 
 
 def build_start_date(row: pd.Series) -> Optional[pd.Timestamp]:
@@ -145,6 +229,10 @@ def parse_args() -> argparse.Namespace:
         "--summary-csv",
         default=RECENT_EMDAT_GEOCODING_SUMMARY_CSV,
     )
+    parser.add_argument(
+        "--admin-units-csv",
+        default=RECENT_EMDAT_ADMIN_UNITS_CSV,
+    )
     parser.add_argument("--limit", type=int, help="Optional row limit for quick checks.")
     return parser.parse_args()
 
@@ -163,30 +251,58 @@ def main() -> None:
     emdat = pd.read_excel(emdat_path)
 
     rows = []
+    unit_rows = []
     cutoff = pd.Timestamp(args.start_date)
     for _, row in emdat.iterrows():
         start_date = build_start_date(row)
         if start_date is None or start_date < cutoff:
             continue
         rows.append(candidate_row(row))
+        unit_rows.extend(admin_unit_rows(row))
         if args.limit and len(rows) >= args.limit:
             break
 
     candidates = pd.DataFrame(rows)
     summary = pd.DataFrame(summary_rows(candidates, args.start_date))
+    admin_units = pd.DataFrame(
+        unit_rows,
+        columns=[
+            "emdat_disaster_id",
+            "disaster_type",
+            "country",
+            "iso",
+            "start_date",
+            "has_direct_coordinates",
+            "location",
+            "source_field",
+            "source_priority",
+            "unit_level",
+            "unit_id",
+            "unit_name",
+            "migration_method",
+        ],
+    )
 
     candidates_path = Path(args.candidates_csv)
     summary_path = Path(args.summary_csv)
+    admin_units_path = Path(args.admin_units_csv)
     candidates_path.parent.mkdir(parents=True, exist_ok=True)
     candidates.to_csv(candidates_path, index=False)
     summary.to_csv(summary_path, index=False)
+    admin_units.to_csv(admin_units_path, index=False)
 
     print(f"Analyzed EM-DAT events from {args.start_date}: {len(candidates)}")
     print(f"Candidates CSV: {candidates_path}")
     print(f"Summary CSV: {summary_path}")
+    print(f"Admin units CSV: {admin_units_path}")
     print()
     for _, row in summary.iterrows():
         print(f"{row['metric']}: {row['count']} ({row['percent']}%)")
+    print(
+        "admin_unit_rows: "
+        f"{len(admin_units)} "
+        f"({admin_units['emdat_disaster_id'].nunique() if len(admin_units) else 0} events)"
+    )
 
 
 if __name__ == "__main__":
