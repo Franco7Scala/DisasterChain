@@ -14,6 +14,7 @@ RESULTS_DIR = os.path.join(BASE_DIR, "results")
 # Define the exact paths of the original Excel and CSV files that contain the raw data.
 EMDAT_INPUT_PATH = os.path.join(BASE_DIR, "data", "public_emdat_dal_2000.xlsx")
 GDIS_INPUT_PATH = os.path.join(BASE_DIR, "data", "pend-gdis-1960-2018-disasterlocations.csv")
+GADM_DATA_DIR = os.path.join(BASE_DIR, "data", "gadm")
 
 # Output File Paths
 # The files where we will save the results. The final file will be a single structured JSON.
@@ -77,6 +78,10 @@ RECENT_EMDAT_GEOCODING_SUMMARY_CSV = os.path.join(
 RECENT_EMDAT_ADMIN_UNITS_CSV = os.path.join(
     RECENT_EMDAT_GEOCODING_OUTPUT_DIR,
     "admin_units.csv",
+)
+RECENT_EMDAT_ADMIN_UNIT_BBOXES_CSV = os.path.join(
+    RECENT_EMDAT_GEOCODING_OUTPUT_DIR,
+    "admin_unit_bboxes.csv",
 )
 
 SATELLITE_DEFAULT_AOI_HALF_SIZE_KM = 10.0

@@ -99,3 +99,18 @@ separately from the main pipeline:
 ```bash
 python src/fetch_landsat_sample.py --event-id 2014-0317-USA --collection landsat-ot-l2
 ```
+
+To inspect recent EM-DAT geocoding coverage and normalize administrative units:
+
+```bash
+python src/analyze_recent_emdat_geocoding.py --start-date 2014-04-03
+```
+
+Download the needed GADM country files in JSON/GeoJSON format and place them
+under `data/gadm/`. Then build prototype bounding boxes from those local GADM
+files:
+
+```bash
+python src/build_admin_unit_bboxes.py --dry-run
+python src/build_admin_unit_bboxes.py
+```
