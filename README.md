@@ -111,6 +111,8 @@ under `data/gadm/`. Then build prototype bounding boxes from those local GADM
 files:
 
 ```bash
+python src/download_gadm_files.py --dry-run --top-countries 10
+python src/download_gadm_files.py --top-countries 10 --download
 python src/build_admin_unit_bboxes.py --dry-run
 python src/build_admin_unit_bboxes.py
 ```

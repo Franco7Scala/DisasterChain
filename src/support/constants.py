@@ -15,6 +15,8 @@ RESULTS_DIR = os.path.join(BASE_DIR, "results")
 EMDAT_INPUT_PATH = os.path.join(BASE_DIR, "data", "public_emdat_dal_2000.xlsx")
 GDIS_INPUT_PATH = os.path.join(BASE_DIR, "data", "pend-gdis-1960-2018-disasterlocations.csv")
 GADM_DATA_DIR = os.path.join(BASE_DIR, "data", "gadm")
+GADM_GEOJSON_BASE_URL = "https://geodata.ucdavis.edu/gadm/gadm4.1/json"
+GADM_FILE_PREFIX = "gadm41"
 
 # Output File Paths
 # The files where we will save the results. The final file will be a single structured JSON.
@@ -82,6 +84,10 @@ RECENT_EMDAT_ADMIN_UNITS_CSV = os.path.join(
 RECENT_EMDAT_ADMIN_UNIT_BBOXES_CSV = os.path.join(
     RECENT_EMDAT_GEOCODING_OUTPUT_DIR,
     "admin_unit_bboxes.csv",
+)
+GADM_DOWNLOAD_PLAN_CSV = os.path.join(
+    RECENT_EMDAT_GEOCODING_OUTPUT_DIR,
+    "gadm_download_plan.csv",
 )
 
 SATELLITE_DEFAULT_AOI_HALF_SIZE_KM = 10.0
