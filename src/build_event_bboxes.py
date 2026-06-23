@@ -85,6 +85,40 @@ def normalize_unit_level(value) -> int:
         return -1
 
 
+def deduplicate_matched_aois(matched: pd.DataFrame) -> pd.DataFrame:
+    if matched.empty:
+        return matched
+
+    working = matched.copy()
+    for column in BBOX_COLUMNS:
+        working[f"_{column}_key"] = pd.to_numeric(working[column], errors="coerce").round(6)
+
+    working["_unit_level_key"] = working["unit_level"].apply(normalize_unit_level)
+    working["_source_rank"] = working["source_field"].map(
+        {
+            "GADM Admin Units": 0,
+            "Admin Units": 1,
+        }
+    ).fillna(2)
+    working["_match_method_rank"] = working["match_method"].map(
+        {
+            "gadm_id": 0,
+            "name_level": 1,
+        }
+    ).fillna(2)
+
+    dedupe_columns = [
+        "emdat_disaster_id",
+        "_unit_level_key",
+        "_bbox_min_lon_key",
+        "_bbox_min_lat_key",
+        "_bbox_max_lon_key",
+        "_bbox_max_lat_key",
+    ]
+    working = working.sort_values(["_source_rank", "_match_method_rank"], kind="stable")
+    return working.drop_duplicates(dedupe_columns, keep="first").copy()
+
+
 def safe_aoi_part(value) -> str:
     text = str(value).strip() if value is not None and not pd.isna(value) else ""
     text = AOI_ID_CLEANUP_RE.sub("_", text)
@@ -326,7 +360,7 @@ def build_event_unit_aois(
 ) -> pd.DataFrame:
     rows: List[dict] = []
     for _, event_group in admin_unit_bboxes.groupby("emdat_disaster_id", sort=False):
-        matched = matched_rows_for_level(event_group, unit_level=unit_level)
+        matched = deduplicate_matched_aois(matched_rows_for_level(event_group, unit_level=unit_level))
         if matched.empty:
             if not only_matched:
                 output = unmatched_event_row(event_group)
