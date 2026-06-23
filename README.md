@@ -116,7 +116,9 @@ python src/download_gadm_files.py --top-countries 10 --download
 python src/build_admin_unit_bboxes.py --dry-run
 python src/build_admin_unit_bboxes.py
 python src/build_event_bboxes.py
+python src/build_event_bboxes.py --separate-units --unit-level 2 --output-csv results/recent_emdat_geocoding/event_aois_adm2.csv
 ```
 
 The event-level output includes quality flags for very large administrative
-unions, which should be reviewed before being used as satellite processing AOIs.
+unions. For satellite processing AOIs, the preferred output is the separate
+adm_2 file, which keeps multiple affected administrative units as separate AOIs.
