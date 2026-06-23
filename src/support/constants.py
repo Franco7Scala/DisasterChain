@@ -85,6 +85,10 @@ RECENT_EMDAT_ADMIN_UNIT_BBOXES_CSV = os.path.join(
     RECENT_EMDAT_GEOCODING_OUTPUT_DIR,
     "admin_unit_bboxes.csv",
 )
+RECENT_EMDAT_EVENT_BBOXES_CSV = os.path.join(
+    RECENT_EMDAT_GEOCODING_OUTPUT_DIR,
+    "event_bboxes.csv",
+)
 GADM_DOWNLOAD_PLAN_CSV = os.path.join(
     RECENT_EMDAT_GEOCODING_OUTPUT_DIR,
     "gadm_download_plan.csv",
