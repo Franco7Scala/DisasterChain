@@ -117,3 +117,6 @@ python src/build_admin_unit_bboxes.py --dry-run
 python src/build_admin_unit_bboxes.py
 python src/build_event_bboxes.py
 ```
+
+The event-level output includes quality flags for very large administrative
+unions, which should be reviewed before being used as satellite processing AOIs.

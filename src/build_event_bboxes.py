@@ -35,16 +35,45 @@ def unique_join(values: Iterable, separator: str = " | ") -> str:
     return separator.join(seen)
 
 
-def approximate_bbox_area_km2(
+def approximate_bbox_metrics(
     min_lon: float,
     min_lat: float,
     max_lon: float,
     max_lat: float,
-) -> float:
+) -> tuple:
     center_lat = (min_lat + max_lat) / 2
     width_km = max(0.0, max_lon - min_lon) * 111.32 * math.cos(math.radians(center_lat))
     height_km = max(0.0, max_lat - min_lat) * 111.32
-    return width_km * height_km
+    return width_km, height_km, width_km * height_km
+
+
+def bbox_quality(
+    area_km2: float,
+    width_km: float,
+    height_km: float,
+    matched_units: int,
+    review_area_km2: float,
+    large_area_km2: float,
+    review_side_km: float,
+    review_unit_count: int,
+) -> tuple:
+    reasons = []
+    if area_km2 >= large_area_km2:
+        reasons.append("very_large_area")
+    elif area_km2 >= review_area_km2:
+        reasons.append("large_area")
+    if width_km >= review_side_km:
+        reasons.append("large_width")
+    if height_km >= review_side_km:
+        reasons.append("large_height")
+    if matched_units >= review_unit_count:
+        reasons.append("many_admin_units")
+
+    if not reasons:
+        return "usable", ""
+    if "very_large_area" in reasons:
+        return "review_very_large", ",".join(reasons)
+    return "review", ",".join(reasons)
 
 
 def event_base_row(group: pd.DataFrame) -> dict:
@@ -56,7 +85,13 @@ def event_base_row(group: pd.DataFrame) -> dict:
     }
 
 
-def matched_event_row(group: pd.DataFrame) -> dict:
+def matched_event_row(
+    group: pd.DataFrame,
+    review_area_km2: float,
+    large_area_km2: float,
+    review_side_km: float,
+    review_unit_count: int,
+) -> dict:
     matched = group[group["match_status"].eq("matched")].copy()
     base = event_base_row(group)
 
@@ -75,7 +110,18 @@ def matched_event_row(group: pd.DataFrame) -> dict:
         + ":"
         + matched["unit_name"].fillna("").astype(str)
     )
-    area_km2 = approximate_bbox_area_km2(min_lon, min_lat, max_lon, max_lat)
+    matched_units = unit_keys.nunique()
+    width_km, height_km, area_km2 = approximate_bbox_metrics(min_lon, min_lat, max_lon, max_lat)
+    quality, quality_reasons = bbox_quality(
+        area_km2=area_km2,
+        width_km=width_km,
+        height_km=height_km,
+        matched_units=matched_units,
+        review_area_km2=review_area_km2,
+        large_area_km2=large_area_km2,
+        review_side_km=review_side_km,
+        review_unit_count=review_unit_count,
+    )
 
     base.update(
         {
@@ -87,9 +133,13 @@ def matched_event_row(group: pd.DataFrame) -> dict:
             "bbox_max_lat": round(float(max_lat), 6),
             "centroid_lon": round(float(centroid_lon), 6),
             "centroid_lat": round(float(centroid_lat), 6),
+            "bbox_width_km_approx": round(float(width_km), 4),
+            "bbox_height_km_approx": round(float(height_km), 4),
             "bbox_area_km2_approx": round(float(area_km2), 4),
+            "bbox_quality": quality,
+            "bbox_quality_reasons": quality_reasons,
             "matched_admin_unit_rows": len(matched),
-            "matched_admin_units": unit_keys.nunique(),
+            "matched_admin_units": matched_units,
             "matched_unit_levels": unique_join(sorted(matched["unit_level"].dropna().unique()), ","),
             "match_methods": unique_join(matched["match_method"].dropna().unique(), ","),
             "geometry_source_files": unique_join(matched["geometry_source_file"].dropna().unique()),
@@ -111,7 +161,11 @@ def unmatched_event_row(group: pd.DataFrame) -> dict:
             "bbox_max_lat": "",
             "centroid_lon": "",
             "centroid_lat": "",
+            "bbox_width_km_approx": "",
+            "bbox_height_km_approx": "",
             "bbox_area_km2_approx": "",
+            "bbox_quality": "unmatched",
+            "bbox_quality_reasons": "",
             "matched_admin_unit_rows": 0,
             "matched_admin_units": 0,
             "matched_unit_levels": "",
@@ -123,12 +177,27 @@ def unmatched_event_row(group: pd.DataFrame) -> dict:
     return base
 
 
-def build_event_bboxes(admin_unit_bboxes: pd.DataFrame, only_matched: bool = False) -> pd.DataFrame:
+def build_event_bboxes(
+    admin_unit_bboxes: pd.DataFrame,
+    only_matched: bool = False,
+    review_area_km2: float = 100000.0,
+    large_area_km2: float = 1000000.0,
+    review_side_km: float = 500.0,
+    review_unit_count: int = 20,
+) -> pd.DataFrame:
     rows: List[dict] = []
     for _, group in admin_unit_bboxes.groupby("emdat_disaster_id", sort=False):
         has_match = group["match_status"].eq("matched").any()
         if has_match:
-            rows.append(matched_event_row(group))
+            rows.append(
+                matched_event_row(
+                    group,
+                    review_area_km2=review_area_km2,
+                    large_area_km2=large_area_km2,
+                    review_side_km=review_side_km,
+                    review_unit_count=review_unit_count,
+                )
+            )
         elif not only_matched:
             rows.append(unmatched_event_row(group))
     return pd.DataFrame(rows)
@@ -157,6 +226,30 @@ def parse_args() -> argparse.Namespace:
         default=10,
         help="Number of largest event bounding boxes to print for manual review.",
     )
+    parser.add_argument(
+        "--review-area-km2",
+        type=float,
+        default=100000.0,
+        help="Mark matched event bboxes at or above this area as review.",
+    )
+    parser.add_argument(
+        "--large-area-km2",
+        type=float,
+        default=1000000.0,
+        help="Mark matched event bboxes at or above this area as review_very_large.",
+    )
+    parser.add_argument(
+        "--review-side-km",
+        type=float,
+        default=500.0,
+        help="Mark matched event bboxes with width/height at or above this value as review.",
+    )
+    parser.add_argument(
+        "--review-unit-count",
+        type=int,
+        default=20,
+        help="Mark event bboxes with at least this many matched admin units as review.",
+    )
     return parser.parse_args()
 
 
@@ -177,7 +270,14 @@ def main() -> None:
     if missing_columns:
         raise SystemExit(f"Missing required column(s): {', '.join(missing_columns)}")
 
-    event_bboxes = build_event_bboxes(admin_unit_bboxes, only_matched=args.only_matched)
+    event_bboxes = build_event_bboxes(
+        admin_unit_bboxes,
+        only_matched=args.only_matched,
+        review_area_km2=args.review_area_km2,
+        large_area_km2=args.large_area_km2,
+        review_side_km=args.review_side_km,
+        review_unit_count=args.review_unit_count,
+    )
     output_path.parent.mkdir(parents=True, exist_ok=True)
     event_bboxes.to_csv(output_path, index=False)
 
@@ -188,6 +288,9 @@ def main() -> None:
     print(f"Matched event bboxes: {int(matched.sum())}")
     if len(event_bboxes):
         print(f"Matched event percent: {round(matched.mean() * 100, 2)}%")
+    if "bbox_quality" in event_bboxes.columns:
+        print("BBox quality counts:")
+        print(event_bboxes["bbox_quality"].value_counts().to_string())
     print(f"Output CSV: {output_path}")
 
     largest = event_bboxes.loc[matched].sort_values(
