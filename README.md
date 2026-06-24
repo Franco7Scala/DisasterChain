@@ -111,11 +111,12 @@ under `data/gadm/`. Then build prototype bounding boxes from those local GADM
 files:
 
 ```bash
-python src/download_gadm_files.py --dry-run --top-countries 10
-python src/download_gadm_files.py --top-countries 10 --download
+python src/download_gadm_files.py --unit-level 2 --dry-run --top-countries 10
+python src/download_gadm_files.py --unit-level 2 --top-countries 10 --download
 python src/build_admin_unit_bboxes.py --dry-run
 python src/build_admin_unit_bboxes.py
-python src/build_event_bboxes.py
+python src/build_event_bboxes.py --separate-units --unit-level 2 \
+  --output-csv results/recent_emdat_geocoding/event_aois_adm2.csv
 python src/build_event_bboxes.py --separate-units --unit-level 2 --output-csv results/recent_emdat_geocoding/event_aois_adm2.csv
 ```
 

@@ -112,6 +112,7 @@ def filter_plan(
     plan: pd.DataFrame,
     countries: Set[str],
     exclude_countries: Set[str],
+    unit_level: Optional[int],
     top_countries: Optional[int],
     top_items: Optional[int],
 ) -> pd.DataFrame:
@@ -122,6 +123,8 @@ def filter_plan(
         filtered = filtered[filtered["iso"].isin(countries)]
     if exclude_countries:
         filtered = filtered[~filtered["iso"].isin(exclude_countries)]
+    if unit_level is not None:
+        filtered = filtered[filtered["unit_level"].eq(unit_level)]
     if top_countries is not None and top_countries > 0 and not countries:
         top_isos = (
             filtered.drop_duplicates("iso")
@@ -206,6 +209,12 @@ def parse_args() -> argparse.Namespace:
         "--exclude-country",
         help="Comma-separated ISO3 country codes to exclude, e.g. USA,CHN.",
     )
+    parser.add_argument(
+        "--unit-level",
+        type=int,
+        choices=range(0, 6),
+        help="Download only the selected GADM administrative level, e.g. 2.",
+    )
     parser.add_argument("--top-countries", type=int, default=10)
     parser.add_argument("--top-items", type=int)
     parser.add_argument("--timeout-seconds", type=int, default=120)
@@ -243,6 +252,7 @@ def main() -> None:
         plan,
         countries=parse_csv_set(args.country),
         exclude_countries=parse_csv_set(args.exclude_country),
+        unit_level=args.unit_level,
         top_countries=args.top_countries,
         top_items=args.top_items,
     )
