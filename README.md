@@ -117,7 +117,7 @@ python src/build_admin_unit_bboxes.py --dry-run
 python src/build_admin_unit_bboxes.py
 python src/build_event_bboxes.py --separate-units --unit-level 2 \
   --output-csv results/recent_emdat_geocoding/event_aois_adm2.csv
-python src/build_event_bboxes.py --separate-units --unit-level 2 --output-csv results/recent_emdat_geocoding/event_aois_adm2.csv
+python src/summarize_geocoding_coverage.py
 ```
 
 The event-level output includes quality flags for very large administrative

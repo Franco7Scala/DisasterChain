@@ -89,6 +89,18 @@ RECENT_EMDAT_EVENT_BBOXES_CSV = os.path.join(
     RECENT_EMDAT_GEOCODING_OUTPUT_DIR,
     "event_bboxes.csv",
 )
+RECENT_EMDAT_ADM2_AOIS_CSV = os.path.join(
+    RECENT_EMDAT_GEOCODING_OUTPUT_DIR,
+    "event_aois_adm2.csv",
+)
+RECENT_EMDAT_GEOCODING_COVERAGE_SUMMARY_CSV = os.path.join(
+    RECENT_EMDAT_GEOCODING_OUTPUT_DIR,
+    "coverage_summary.csv",
+)
+RECENT_EMDAT_REMAINING_EVENTS_CSV = os.path.join(
+    RECENT_EMDAT_GEOCODING_OUTPUT_DIR,
+    "remaining_events.csv",
+)
 GADM_DOWNLOAD_PLAN_CSV = os.path.join(
     RECENT_EMDAT_GEOCODING_OUTPUT_DIR,
     "gadm_download_plan.csv",
