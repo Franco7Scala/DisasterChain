@@ -101,6 +101,14 @@ RECENT_EMDAT_REMAINING_EVENTS_CSV = os.path.join(
     RECENT_EMDAT_GEOCODING_OUTPUT_DIR,
     "remaining_events.csv",
 )
+RECENT_EMDAT_UNMATCHED_ADMIN_DIAGNOSTICS_CSV = os.path.join(
+    RECENT_EMDAT_GEOCODING_OUTPUT_DIR,
+    "unmatched_admin_diagnostics.csv",
+)
+RECENT_EMDAT_UNMATCHED_ADMIN_SUMMARY_CSV = os.path.join(
+    RECENT_EMDAT_GEOCODING_OUTPUT_DIR,
+    "unmatched_admin_summary.csv",
+)
 GADM_DOWNLOAD_PLAN_CSV = os.path.join(
     RECENT_EMDAT_GEOCODING_OUTPUT_DIR,
     "gadm_download_plan.csv",
