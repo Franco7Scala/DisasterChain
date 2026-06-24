@@ -126,12 +126,20 @@ def filter_plan(
     if unit_level is not None:
         filtered = filtered[filtered["unit_level"].eq(unit_level)]
     if top_countries is not None and top_countries > 0 and not countries:
+        priority_column = "candidate_events" if unit_level is not None else "country_candidate_events"
         top_isos = (
             filtered.drop_duplicates("iso")
-            .sort_values("country_candidate_events", ascending=False)
+            .sort_values(
+                [priority_column, "gadm_id_events", "iso"],
+                ascending=[False, False, True],
+            )
             .head(top_countries)["iso"]
         )
         filtered = filtered[filtered["iso"].isin(set(top_isos))]
+        filtered = filtered.sort_values(
+            [priority_column, "gadm_id_events", "iso", "unit_level"],
+            ascending=[False, False, True, True],
+        )
     if top_items is not None and top_items > 0:
         filtered = filtered.head(top_items)
     return filtered.reset_index(drop=True)
