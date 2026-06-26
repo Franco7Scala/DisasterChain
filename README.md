@@ -159,3 +159,6 @@ a very small bounding box.
 The text geocoder also builds a few conservative query variants for common
 cases seen during validation, including official country-name aliases, island
 abbreviations, accents/apostrophes, and selected administrative-region aliases.
+When a query clearly mentions multiple places, component-level matches are kept
+as `matched_review` because one geocoded point cannot represent all affected
+areas automatically.

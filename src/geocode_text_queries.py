@@ -66,6 +66,11 @@ PLACE_QUALIFIER_RE = re.compile(
     re.IGNORECASE,
 )
 ISLAND_ABBREVIATION_RE = re.compile(r"\bisl\.(?=\W|$)", re.IGNORECASE)
+COMPOSITE_ADMIN_RE = re.compile(
+    r"^(?P<left>.+?)\s+and\s+(?P<right>.+?)\s+"
+    r"(?P<unit>states|provinces|regions|departments|governorates|districts)$",
+    re.IGNORECASE,
+)
 WHITESPACE_RE = re.compile(r"\s+")
 BAD_RESULT_CLASSES = {"amenity", "building", "craft", "historic", "leisure", "office", "shop", "tourism"}
 GOOD_RESULT_CLASSES = {"boundary", "place"}
@@ -83,12 +88,22 @@ GOOD_RESULT_TYPES = {
 }
 REVIEW_RESULT_SCORE_THRESHOLD = 3.0
 MIN_ADMIN_HINT_BBOX_SIDE_DEG = 0.75
+SPLIT_COMPONENT_VARIANT = "split_component"
+PLURAL_ADMIN_UNITS = {
+    "departments": "department",
+    "districts": "district",
+    "governorates": "governorate",
+    "provinces": "province",
+    "regions": "region",
+    "states": "state",
+}
 COUNTRY_ALIASES = {
     "bolivia plurinational state of": ["Bolivia"],
     "cote d ivoire": ["Ivory Coast", "Cote d'Ivoire"],
     "iran islamic republic of": ["Iran"],
     "tanzania united republic of": ["Tanzania"],
     "venezuela bolivarian republic of": ["Venezuela"],
+    "viet nam": ["Vietnam"],
 }
 PLACE_ALIASES = {
     "region de bruxelles capitale brussels hoofdstedelijk gewest": [
@@ -100,6 +115,11 @@ PLACE_ALIASES = {
         "Brussels-Capital Region",
     ],
     "region wallonne": ["Wallonia"],
+    "sistan and baluchistan province": [
+        "Sistan and Baluchestan Province",
+        "Sistan and Baluchestan",
+    ],
+    "sistan and baluchistan": ["Sistan and Baluchestan"],
     "vlaams gewest": ["Flanders"],
 }
 
@@ -208,6 +228,30 @@ def country_variants(country: str) -> List[str]:
     return variants
 
 
+def composite_place_components(place: str) -> List[str]:
+    place = compact_text(place)
+    components: List[str] = []
+
+    def add(value: str) -> None:
+        value = compact_text(value)
+        if value and value not in components:
+            components.append(value)
+
+    match = COMPOSITE_ADMIN_RE.match(place)
+    if match:
+        unit = PLURAL_ADMIN_UNITS.get(match.group("unit").lower(), "")
+        add(f"{match.group('left')} {unit}")
+        add(f"{match.group('right')} {unit}")
+
+    if "," in place and "(" not in place and ")" not in place:
+        parts = [part.strip() for part in place.split(",") if part.strip()]
+        if 1 < len(parts) <= 3 and all(len(part.split()) <= 4 for part in parts):
+            for part in parts:
+                add(part)
+
+    return components
+
+
 def query_variants(row: pd.Series) -> List[Tuple[str, str]]:
     original_query = str(row.get("geocoding_query") or "").strip()
     place = compact_text(row.get("place_name") or "")
@@ -234,6 +278,9 @@ def query_variants(row: pd.Series) -> List[Tuple[str, str]]:
                         "without_admin_qualifier",
                         f"{without_qualifier}, {country_variant}",
                     )
+        for component in composite_place_components(place):
+            for country_variant in country_variants(country):
+                add(SPLIT_COMPONENT_VARIANT, f"{component}, {country_variant}")
     return variants
 
 
@@ -411,6 +458,11 @@ def result_from_response(
         key=lambda item: item[0],
         reverse=True,
     )[0]
+    if query_variant == SPLIT_COMPONENT_VARIANT and quality == "accepted":
+        quality = "review"
+        quality_reasons = ",".join(
+            reason for reason in [quality_reasons, "split_component_query"] if reason
+        )
     return result_from_candidate(
         row=row,
         candidate=candidate,
