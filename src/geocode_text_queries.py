@@ -95,6 +95,10 @@ PLACE_ALIASES = {
         "Brussels Capital Region",
         "Brussels-Capital Region",
     ],
+    "region de bruxelles capitale brussels hoofdstedelijk gewes": [
+        "Brussels Capital Region",
+        "Brussels-Capital Region",
+    ],
     "region wallonne": ["Wallonia"],
     "vlaams gewest": ["Flanders"],
 }
