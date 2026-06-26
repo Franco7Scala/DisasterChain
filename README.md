@@ -155,3 +155,7 @@ used. With `--force`, existing rows for the selected queries are replaced rather
 than duplicated. Results marked as `matched_review` need manual inspection before
 being used as final coordinates, for example when a state/province query returns
 a very small bounding box.
+
+The text geocoder also builds a few conservative query variants for common
+cases seen during validation, including official country-name aliases, island
+abbreviations, accents/apostrophes, and selected administrative-region aliases.

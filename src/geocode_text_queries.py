@@ -2,6 +2,7 @@ import argparse
 import json
 import re
 import time
+import unicodedata
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Dict, List, Optional, Set, Tuple
@@ -55,13 +56,16 @@ RESULT_COLUMNS = [
     "error",
 ]
 ADMIN_HINT_RE = re.compile(
-    r"\b(?:state|province|prov\.|region|district|prefecture|governorate)\b",
+    r"\b(?:autonomous region|department|district|governorate|prefecture|"
+    r"province|prov\.|region|state|territory)\b",
     re.IGNORECASE,
 )
 PLACE_QUALIFIER_RE = re.compile(
-    r"\b(?:state|province|prov\.|region|district|prefecture|governorate)\b\.?",
+    r"\b(?:autonomous region|department|district|governorate|prefecture|"
+    r"province|prov\.|region|state|territory)\b\.?",
     re.IGNORECASE,
 )
+ISLAND_ABBREVIATION_RE = re.compile(r"\bisl\.(?=\W|$)", re.IGNORECASE)
 WHITESPACE_RE = re.compile(r"\s+")
 BAD_RESULT_CLASSES = {"amenity", "building", "craft", "historic", "leisure", "office", "shop", "tourism"}
 GOOD_RESULT_CLASSES = {"boundary", "place"}
@@ -79,6 +83,21 @@ GOOD_RESULT_TYPES = {
 }
 REVIEW_RESULT_SCORE_THRESHOLD = 3.0
 MIN_ADMIN_HINT_BBOX_SIDE_DEG = 0.75
+COUNTRY_ALIASES = {
+    "bolivia plurinational state of": ["Bolivia"],
+    "cote d ivoire": ["Ivory Coast", "Cote d'Ivoire"],
+    "iran islamic republic of": ["Iran"],
+    "tanzania united republic of": ["Tanzania"],
+    "venezuela bolivarian republic of": ["Venezuela"],
+}
+PLACE_ALIASES = {
+    "region de bruxelles capitale brussels hoofdstedelijk gewest": [
+        "Brussels Capital Region",
+        "Brussels-Capital Region",
+    ],
+    "region wallonne": ["Wallonia"],
+    "vlaams gewest": ["Flanders"],
+}
 
 
 def utc_now() -> str:
@@ -127,18 +146,62 @@ def csv_set(value: Optional[str]) -> Set[str]:
     return {item.strip() for item in value.split(",") if item.strip()}
 
 
+def strip_accents(value: str) -> str:
+    text = unicodedata.normalize("NFKD", str(value or ""))
+    return "".join(char for char in text if not unicodedata.combining(char))
+
+
 def normalize_text(value: str) -> str:
-    text = str(value or "").lower()
+    text = strip_accents(value).lower()
     text = re.sub(r"[^a-z0-9]+", " ", text)
     return WHITESPACE_RE.sub(" ", text).strip()
 
 
 def compact_text(value: str) -> str:
-    return WHITESPACE_RE.sub(" ", str(value or "").replace("-", " ")).strip(" ,")
+    text = str(value or "")
+    for apostrophe in ("’", "‘", "`", "´", "ʼ", "â€™", "â€˜"):
+        text = text.replace(apostrophe, "'")
+    return WHITESPACE_RE.sub(" ", text.replace("-", " ")).strip(" ,")
 
 
 def place_core(value: str) -> str:
     return normalize_text(PLACE_QUALIFIER_RE.sub(" ", str(value or "")))
+
+
+def alias_values(value: str, aliases: Dict[str, List[str]]) -> List[str]:
+    return aliases.get(normalize_text(value), [])
+
+
+def place_variants(place: str) -> List[str]:
+    variants: List[str] = []
+
+    def add(value: str) -> None:
+        value = compact_text(value)
+        if value and value not in variants:
+            variants.append(value)
+
+    add(place)
+    expanded_island = compact_text(ISLAND_ABBREVIATION_RE.sub("Island", place))
+    add(expanded_island)
+    for part in re.split(r"\s*/\s*", place):
+        add(part)
+    for alias in alias_values(place, PLACE_ALIASES):
+        add(alias)
+    return variants
+
+
+def country_variants(country: str) -> List[str]:
+    variants: List[str] = []
+
+    def add(value: str) -> None:
+        value = compact_text(value)
+        if value and value not in variants:
+            variants.append(value)
+
+    add(country)
+    for alias in alias_values(country, COUNTRY_ALIASES):
+        add(alias)
+    return variants
 
 
 def query_variants(row: pd.Series) -> List[Tuple[str, str]]:
@@ -156,10 +219,17 @@ def query_variants(row: pd.Series) -> List[Tuple[str, str]]:
 
     add("original", original_query)
     if place and country:
-        add("place_country", f"{place}, {country}")
-        without_qualifier = compact_text(PLACE_QUALIFIER_RE.sub(" ", place))
-        if without_qualifier and without_qualifier != place:
-            add("without_admin_qualifier", f"{without_qualifier}, {country}")
+        for place_variant in place_variants(place):
+            for country_variant in country_variants(country):
+                add("place_country", f"{place_variant}, {country_variant}")
+                without_qualifier = compact_text(
+                    PLACE_QUALIFIER_RE.sub(" ", place_variant)
+                )
+                if without_qualifier and without_qualifier != place_variant:
+                    add(
+                        "without_admin_qualifier",
+                        f"{without_qualifier}, {country_variant}",
+                    )
     return variants
 
 
