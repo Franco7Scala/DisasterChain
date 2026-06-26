@@ -103,9 +103,11 @@ def deduplicate_matched_aois(matched: pd.DataFrame) -> pd.DataFrame:
     working["_match_method_rank"] = working["match_method"].map(
         {
             "gadm_id": 0,
-            "name_level": 1,
+            "gadm_id_base": 1,
+            "name_level": 2,
+            "name_level_fuzzy": 3,
         }
-    ).fillna(2)
+    ).fillna(4)
 
     dedupe_columns = [
         "emdat_disaster_id",

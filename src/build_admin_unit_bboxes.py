@@ -1,7 +1,9 @@
 import argparse
+from difflib import SequenceMatcher
 import json
 import math
 import re
+import unicodedata
 import zipfile
 from pathlib import Path
 from typing import Dict, Iterable, List, Optional, Tuple
@@ -16,16 +18,55 @@ from support.constants import (
 
 
 GID_RE = re.compile(r"^[A-Z]{3}\.")
+GID_VERSION_RE = re.compile(r"_\d+$")
+NAME_SEPARATOR_RE = re.compile(r"[/|;]+")
+NON_WORD_RE = re.compile(r"[^\w\s-]+", re.UNICODE)
+WHITESPACE_RE = re.compile(r"\s+")
+DEFAULT_FUZZY_NAME_THRESHOLD = 0.92
 
 
 def normalize_text(value) -> str:
     if value is None or (isinstance(value, float) and math.isnan(value)):
         return ""
-    return re.sub(r"\s+", " ", str(value).strip().lower())
+    text = str(value).strip()
+    text = unicodedata.normalize("NFKD", text)
+    text = "".join(char for char in text if not unicodedata.combining(char))
+    text = text.lower().replace("&", " and ")
+    text = text.replace("-", " ")
+    text = NON_WORD_RE.sub(" ", text)
+    return WHITESPACE_RE.sub(" ", text).strip()
 
 
 def normalize_unit_id(value) -> str:
     return str(value).strip() if value is not None and str(value).strip() != "nan" else ""
+
+
+def normalize_gadm_id_base(value: str) -> str:
+    return GID_VERSION_RE.sub("", normalize_unit_id(value))
+
+
+def name_variants(value) -> List[str]:
+    if value is None or (isinstance(value, float) and math.isnan(value)):
+        return []
+    raw_parts = [str(value)]
+    raw_parts.extend(NAME_SEPARATOR_RE.split(str(value)))
+
+    variants = []
+    for part in raw_parts:
+        normalized = normalize_text(part)
+        if normalized and normalized not in variants:
+            variants.append(normalized)
+    return variants
+
+
+def add_unique_index(index: Dict[Tuple, Optional[Dict]], key: Tuple, record: Dict) -> None:
+    current = index.get(key)
+    if current is None and key in index:
+        return
+    if current is not None and current.get("unit_id") != record.get("unit_id"):
+        index[key] = None
+        return
+    index[key] = record
 
 
 def is_geojson_path(path: Path) -> bool:
@@ -101,6 +142,20 @@ def property_value(properties: Dict, *names: str) -> str:
     return ""
 
 
+def property_values(properties: Dict, *names: str) -> List[str]:
+    values = []
+    for name in names:
+        for key in (name, name.upper(), name.lower()):
+            value = properties.get(key)
+            if value is None or not str(value).strip():
+                continue
+            for part in str(value).split("|"):
+                text = part.strip()
+                if text and text not in values:
+                    values.append(text)
+    return values
+
+
 def feature_level(properties: Dict) -> Optional[int]:
     for level in (5, 4, 3, 2, 1, 0):
         if property_value(properties, f"GID_{level}") or property_value(properties, f"NAME_{level}"):
@@ -119,6 +174,12 @@ def feature_record(feature: Dict, source_file: Path) -> Optional[Dict]:
 
     unit_id = property_value(properties, f"GID_{level}")
     unit_name = property_value(properties, f"NAME_{level}")
+    aliases = property_values(
+        properties,
+        f"NAME_{level}",
+        f"VARNAME_{level}",
+        f"NL_NAME_{level}",
+    )
     iso = property_value(properties, "GID_0", "ISO", "COUNTRY")
     if not iso and unit_id:
         iso = unit_id.split(".", 1)[0]
@@ -128,6 +189,7 @@ def feature_record(feature: Dict, source_file: Path) -> Optional[Dict]:
         "unit_level": level,
         "unit_id": unit_id,
         "unit_name": unit_name,
+        "unit_name_aliases": aliases,
         "bbox_min_lon": min_lon,
         "bbox_min_lat": min_lat,
         "bbox_max_lon": max_lon,
@@ -138,9 +200,19 @@ def feature_record(feature: Dict, source_file: Path) -> Optional[Dict]:
     }
 
 
-def load_gadm_index(gadm_dir: Path) -> Tuple[Dict[Tuple[str, str], Dict], Dict[Tuple[str, int, str], Dict]]:
+def load_gadm_index(
+    gadm_dir: Path,
+) -> Tuple[
+    Dict[Tuple[str, str], Dict],
+    Dict[Tuple[str, int, str], Optional[Dict]],
+    Dict[Tuple[str, int, str], Optional[Dict]],
+    Dict[Tuple[str, int], List[Tuple[str, Dict]]],
+]:
     by_id: Dict[Tuple[str, str], Dict] = {}
-    by_name: Dict[Tuple[str, int, str], Dict] = {}
+    by_id_base: Dict[Tuple[str, int, str], Optional[Dict]] = {}
+    by_name: Dict[Tuple[str, int, str], Optional[Dict]] = {}
+    by_level_candidates: Dict[Tuple[str, int], List[Tuple[str, Dict]]] = {}
+    candidate_keys = set()
 
     for path in find_geojson_files(gadm_dir):
         try:
@@ -157,19 +229,67 @@ def load_gadm_index(gadm_dir: Path) -> Tuple[Dict[Tuple[str, str], Dict], Dict[T
                 continue
             iso = record["iso"]
             unit_id = record["unit_id"]
-            unit_name = normalize_text(record["unit_name"])
             level = int(record["unit_level"])
             if unit_id:
                 by_id[(iso, unit_id)] = record
-            if unit_name:
-                by_name[(iso, level, unit_name)] = record
-    return by_id, by_name
+                base_id = normalize_gadm_id_base(unit_id)
+                if base_id and base_id != unit_id:
+                    add_unique_index(by_id_base, (iso, level, base_id), record)
+
+            aliases = record.get("unit_name_aliases") or [record["unit_name"]]
+            for alias in aliases:
+                for unit_name in name_variants(alias):
+                    add_unique_index(by_name, (iso, level, unit_name), record)
+                    candidate_key = (iso, level, unit_name, record["unit_id"])
+                    if candidate_key in candidate_keys:
+                        continue
+                    candidate_keys.add(candidate_key)
+                    by_level_candidates.setdefault((iso, level), []).append((unit_name, record))
+    return by_id, by_id_base, by_name, by_level_candidates
 
 
-def match_admin_unit(row: pd.Series, by_id: Dict, by_name: Dict) -> Tuple[Optional[Dict], str]:
+def fuzzy_name_match(
+    iso: str,
+    level: int,
+    names: List[str],
+    by_level_candidates: Dict[Tuple[str, int], List[Tuple[str, Dict]]],
+    threshold: float,
+) -> Tuple[Optional[Dict], str, float]:
+    candidates = by_level_candidates.get((iso, level), [])
+    if not candidates or not names or threshold >= 1.0:
+        return None, "no_match", 0.0
+
+    best_record = None
+    best_score = 0.0
+    second_score = 0.0
+    for name in names:
+        if len(name) < 4:
+            continue
+        for candidate_name, record in candidates:
+            score = SequenceMatcher(None, name, candidate_name).ratio()
+            if score > best_score:
+                second_score = best_score
+                best_score = score
+                best_record = record
+            elif score > second_score:
+                second_score = score
+
+    if best_record and best_score >= threshold and best_score - second_score >= 0.02:
+        return best_record, "name_level_fuzzy", best_score
+    return None, "no_match", best_score
+
+
+def match_admin_unit(
+    row: pd.Series,
+    by_id: Dict,
+    by_id_base: Dict,
+    by_name: Dict,
+    by_level_candidates: Dict,
+    fuzzy_name_threshold: float,
+) -> Tuple[Optional[Dict], str, float]:
     iso = str(row.get("iso") or "").upper()
     unit_id = normalize_unit_id(row.get("unit_id"))
-    unit_name = normalize_text(row.get("unit_name"))
+    unit_names = name_variants(row.get("unit_name"))
     unit_level = row.get("unit_level")
     try:
         level = int(unit_level)
@@ -179,14 +299,28 @@ def match_admin_unit(row: pd.Series, by_id: Dict, by_name: Dict) -> Tuple[Option
     if iso and unit_id and GID_RE.match(unit_id):
         record = by_id.get((iso, unit_id))
         if record:
-            return record, "gadm_id"
-
-    if iso and level is not None and unit_name:
-        record = by_name.get((iso, level, unit_name))
+            return record, "gadm_id", 1.0
+        base_id = normalize_gadm_id_base(unit_id)
+        record = by_id_base.get((iso, level, base_id)) if level is not None else None
         if record:
-            return record, "name_level"
+            return record, "gadm_id_base", 1.0
 
-    return None, "no_match"
+    if iso and level is not None and unit_names:
+        for unit_name in unit_names:
+            record = by_name.get((iso, level, unit_name))
+            if record:
+                return record, "name_level", 1.0
+        record, method, score = fuzzy_name_match(
+            iso=iso,
+            level=level,
+            names=unit_names,
+            by_level_candidates=by_level_candidates,
+            threshold=fuzzy_name_threshold,
+        )
+        if record:
+            return record, method, score
+
+    return None, "no_match", 0.0
 
 
 def parse_args() -> argparse.Namespace:
@@ -199,6 +333,15 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--admin-units-csv", default=RECENT_EMDAT_ADMIN_UNITS_CSV)
     parser.add_argument("--gadm-dir", default=GADM_DATA_DIR)
     parser.add_argument("--output-csv", default=RECENT_EMDAT_ADMIN_UNIT_BBOXES_CSV)
+    parser.add_argument(
+        "--fuzzy-name-threshold",
+        type=float,
+        default=DEFAULT_FUZZY_NAME_THRESHOLD,
+        help=(
+            "Minimum similarity for fallback ADM name matching within the same "
+            "country and administrative level. Use 1.0 to disable fuzzy matching."
+        ),
+    )
     parser.add_argument(
         "--dry-run",
         action="store_true",
@@ -240,17 +383,27 @@ def main() -> None:
         )
 
     admin_units = pd.read_csv(admin_units_path)
-    by_id, by_name = load_gadm_index(gadm_dir)
+    by_id, by_id_base, by_name, by_level_candidates = load_gadm_index(gadm_dir)
 
     rows = []
     for _, row in admin_units.iterrows():
-        record, match_method = match_admin_unit(row, by_id, by_name)
+        record, match_method, match_score = match_admin_unit(
+            row,
+            by_id=by_id,
+            by_id_base=by_id_base,
+            by_name=by_name,
+            by_level_candidates=by_level_candidates,
+            fuzzy_name_threshold=args.fuzzy_name_threshold,
+        )
         output = row.to_dict()
         if record:
             output.update(
                 {
                     "match_status": "matched",
                     "match_method": match_method,
+                    "match_score": round(match_score, 4),
+                    "matched_gadm_unit_id": record["unit_id"],
+                    "matched_gadm_unit_name": record["unit_name"],
                     "bbox_min_lon": record["bbox_min_lon"],
                     "bbox_min_lat": record["bbox_min_lat"],
                     "bbox_max_lon": record["bbox_max_lon"],
@@ -266,6 +419,9 @@ def main() -> None:
                 {
                     "match_status": "unmatched",
                     "match_method": match_method,
+                    "match_score": round(match_score, 4),
+                    "matched_gadm_unit_id": "",
+                    "matched_gadm_unit_name": "",
                     "bbox_min_lon": "",
                     "bbox_min_lat": "",
                     "bbox_max_lon": "",

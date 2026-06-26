@@ -121,6 +121,12 @@ python src/summarize_geocoding_coverage.py
 python src/analyze_unmatched_admin_units.py
 ```
 
+`build_admin_unit_bboxes.py` first tries exact GADM ids and exact names. If that
+does not work, it also tries version-insensitive GADM ids and a conservative
+same-country/same-level fuzzy name match. The output CSV stores `match_method`,
+`match_score`, and the matched GADM unit id/name so these fallback matches can
+be reviewed.
+
 The event-level output includes quality flags for very large administrative
 unions. For satellite processing AOIs, the preferred output is the separate
 adm_2 file, which keeps multiple affected administrative units as separate AOIs.
