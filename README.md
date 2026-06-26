@@ -119,6 +119,7 @@ python src/build_event_bboxes.py --separate-units --unit-level 2 \
   --output-csv results/recent_emdat_geocoding/event_aois_adm2.csv
 python src/summarize_geocoding_coverage.py
 python src/analyze_unmatched_admin_units.py
+python src/prepare_text_geocoding_candidates.py
 ```
 
 `build_admin_unit_bboxes.py` first tries exact GADM ids and exact names. If that
@@ -130,3 +131,7 @@ be reviewed.
 The event-level output includes quality flags for very large administrative
 unions. For satellite processing AOIs, the preferred output is the separate
 adm_2 file, which keeps multiple affected administrative units as separate AOIs.
+
+`prepare_text_geocoding_candidates.py` is the first free-text geocoding step. It
+does not call external services: it only prepares event/place candidate rows,
+deduplicated geocoding queries, and a summary CSV for later review.

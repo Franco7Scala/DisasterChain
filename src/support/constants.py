@@ -109,6 +109,18 @@ RECENT_EMDAT_UNMATCHED_ADMIN_SUMMARY_CSV = os.path.join(
     RECENT_EMDAT_GEOCODING_OUTPUT_DIR,
     "unmatched_admin_summary.csv",
 )
+RECENT_EMDAT_TEXT_GEOCODING_CANDIDATES_CSV = os.path.join(
+    RECENT_EMDAT_GEOCODING_OUTPUT_DIR,
+    "text_geocoding_candidates.csv",
+)
+RECENT_EMDAT_TEXT_GEOCODING_QUERIES_CSV = os.path.join(
+    RECENT_EMDAT_GEOCODING_OUTPUT_DIR,
+    "text_geocoding_queries.csv",
+)
+RECENT_EMDAT_TEXT_GEOCODING_SUMMARY_CSV = os.path.join(
+    RECENT_EMDAT_GEOCODING_OUTPUT_DIR,
+    "text_geocoding_summary.csv",
+)
 GADM_DOWNLOAD_PLAN_CSV = os.path.join(
     RECENT_EMDAT_GEOCODING_OUTPUT_DIR,
     "gadm_download_plan.csv",
