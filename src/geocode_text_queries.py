@@ -49,6 +49,8 @@ RESULT_COLUMNS = [
     "bbox_north",
     "bbox_west",
     "bbox_east",
+    "bbox_width_deg",
+    "bbox_height_deg",
     "raw_result_json",
     "error",
 ]
@@ -76,6 +78,7 @@ GOOD_RESULT_TYPES = {
     "village",
 }
 REVIEW_RESULT_SCORE_THRESHOLD = 3.0
+MIN_ADMIN_HINT_BBOX_SIDE_DEG = 0.75
 
 
 def utc_now() -> str:
@@ -134,6 +137,10 @@ def compact_text(value: str) -> str:
     return WHITESPACE_RE.sub(" ", str(value or "").replace("-", " ")).strip(" ,")
 
 
+def place_core(value: str) -> str:
+    return normalize_text(PLACE_QUALIFIER_RE.sub(" ", str(value or "")))
+
+
 def query_variants(row: pd.Series) -> List[Tuple[str, str]]:
     original_query = str(row.get("geocoding_query") or "").strip()
     place = compact_text(row.get("place_name") or "")
@@ -156,12 +163,26 @@ def query_variants(row: pd.Series) -> List[Tuple[str, str]]:
     return variants
 
 
+def bbox_side_lengths(candidate: Dict) -> Tuple[float, float]:
+    bbox = candidate.get("boundingbox")
+    if not isinstance(bbox, list) or len(bbox) != 4:
+        return 0.0, 0.0
+    try:
+        south, north, west, east = [float(value) for value in bbox]
+    except (TypeError, ValueError):
+        return 0.0, 0.0
+    return abs(east - west), abs(north - south)
+
+
 def candidate_score(candidate: Dict, row: pd.Series, result_rank: int) -> Tuple[float, str, str]:
     place = normalize_text(row.get("place_name") or row.get("geocoding_query") or "")
+    core_place = place_core(row.get("place_name") or row.get("geocoding_query") or "")
     display_name = normalize_text(candidate.get("display_name", ""))
     place_class = str(candidate.get("class") or "")
     place_type = str(candidate.get("type") or "")
     query = str(row.get("geocoding_query") or "")
+    bbox_width_deg, bbox_height_deg = bbox_side_lengths(candidate)
+    is_admin_query = bool(ADMIN_HINT_RE.search(query))
 
     score = 0.0
     reasons = []
@@ -174,6 +195,9 @@ def candidate_score(candidate: Dict, row: pd.Series, result_rank: int) -> Tuple[
     if place and place in display_name:
         score += 2.0
         reasons.append("place_in_display_name")
+    elif core_place and core_place in display_name:
+        score += 2.0
+        reasons.append("core_place_in_display_name")
     if result_rank == 1:
         score += 0.5
         reasons.append("first_result")
@@ -186,9 +210,16 @@ def candidate_score(candidate: Dict, row: pd.Series, result_rank: int) -> Tuple[
     if place_class in BAD_RESULT_CLASSES:
         score -= 4.0
         reasons.append("poi_or_non_admin_class")
-    if ADMIN_HINT_RE.search(query) and place_class not in GOOD_RESULT_CLASSES:
+    if is_admin_query and place_class and place_class not in GOOD_RESULT_CLASSES:
         score -= 3.0
         reasons.append("admin_query_non_admin_result")
+    if (
+        is_admin_query
+        and max(bbox_width_deg, bbox_height_deg) > 0
+        and max(bbox_width_deg, bbox_height_deg) < MIN_ADMIN_HINT_BBOX_SIDE_DEG
+    ):
+        score -= 3.0
+        reasons.append("small_bbox_for_admin_query")
 
     quality = "accepted" if score >= REVIEW_RESULT_SCORE_THRESHOLD else "review"
     return score, quality, ",".join(reasons)
@@ -196,12 +227,22 @@ def candidate_score(candidate: Dict, row: pd.Series, result_rank: int) -> Tuple[
 
 def parse_bbox(value) -> Dict[str, str]:
     if not isinstance(value, list) or len(value) != 4:
-        return {"bbox_south": "", "bbox_north": "", "bbox_west": "", "bbox_east": ""}
+        return {
+            "bbox_south": "",
+            "bbox_north": "",
+            "bbox_west": "",
+            "bbox_east": "",
+            "bbox_width_deg": "",
+            "bbox_height_deg": "",
+        }
+    width_deg, height_deg = bbox_side_lengths({"boundingbox": value})
     return {
         "bbox_south": value[0],
         "bbox_north": value[1],
         "bbox_west": value[2],
         "bbox_east": value[3],
+        "bbox_width_deg": round(width_deg, 6),
+        "bbox_height_deg": round(height_deg, 6),
     }
 
 
@@ -235,6 +276,8 @@ def base_result(row: pd.Series, status: str, error: str = "") -> Dict:
         "bbox_north": "",
         "bbox_west": "",
         "bbox_east": "",
+        "bbox_width_deg": "",
+        "bbox_height_deg": "",
         "raw_result_json": "",
         "error": error,
     }

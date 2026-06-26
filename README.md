@@ -153,4 +153,5 @@ python src/geocode_text_queries.py --limit 50
 The geocoder skips queries already stored in the results CSV unless `--force` is
 used. With `--force`, existing rows for the selected queries are replaced rather
 than duplicated. Results marked as `matched_review` need manual inspection before
-being used as final coordinates.
+being used as final coordinates, for example when a state/province query returns
+a very small bounding box.
