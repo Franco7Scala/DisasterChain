@@ -142,3 +142,13 @@ To compare all remaining events with only natural/environmental disaster types:
 python src/prepare_text_geocoding_candidates.py
 python src/prepare_text_geocoding_candidates.py --natural-only
 ```
+
+To geocode a small cached batch from the natural/environmental query list:
+
+```bash
+python src/geocode_text_queries.py --dry-run --limit 20
+python src/geocode_text_queries.py --limit 50
+```
+
+The geocoder skips queries already stored in the results CSV unless `--force` is
+used.

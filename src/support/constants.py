@@ -133,6 +133,10 @@ RECENT_EMDAT_NATURAL_TEXT_GEOCODING_SUMMARY_CSV = os.path.join(
     RECENT_EMDAT_GEOCODING_OUTPUT_DIR,
     "text_geocoding_summary_natural.csv",
 )
+RECENT_EMDAT_NATURAL_TEXT_GEOCODING_RESULTS_CSV = os.path.join(
+    RECENT_EMDAT_GEOCODING_OUTPUT_DIR,
+    "text_geocoding_results_natural.csv",
+)
 GADM_DOWNLOAD_PLAN_CSV = os.path.join(
     RECENT_EMDAT_GEOCODING_OUTPUT_DIR,
     "gadm_download_plan.csv",
@@ -150,6 +154,10 @@ RECENT_EMDAT_NATURAL_DISASTER_TYPES = [
     "Volcanic activity",
     "Wildfire",
 ]
+NOMINATIM_SEARCH_URL = "https://nominatim.openstreetmap.org/search"
+NOMINATIM_USER_AGENT = "Unical-EnvironmentCausalDataset/0.1"
+TEXT_GEOCODING_DEFAULT_LIMIT = 50
+TEXT_GEOCODING_DEFAULT_SLEEP_SECONDS = 1.2
 
 SATELLITE_DEFAULT_AOI_HALF_SIZE_KM = 10.0
 SATELLITE_DEFAULT_WINDOW_DAYS = 10

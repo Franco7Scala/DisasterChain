@@ -111,6 +111,8 @@ def place_quality(place: str) -> tuple[str, str]:
         reasons.append("contains_number")
     if APPROXIMATE_PLACE_RE.search(place):
         reasons.append("approximate_place_text")
+    if place.count(",") >= 2:
+        reasons.append("possible_multi_place_text")
 
     if not reasons:
         return "usable", ""
