@@ -135,3 +135,10 @@ adm_2 file, which keeps multiple affected administrative units as separate AOIs.
 `prepare_text_geocoding_candidates.py` is the first free-text geocoding step. It
 does not call external services: it only prepares event/place candidate rows,
 deduplicated geocoding queries, and a summary CSV for later review.
+
+To compare all remaining events with only natural/environmental disaster types:
+
+```bash
+python src/prepare_text_geocoding_candidates.py
+python src/prepare_text_geocoding_candidates.py --natural-only
+```

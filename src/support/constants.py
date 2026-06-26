@@ -121,10 +121,35 @@ RECENT_EMDAT_TEXT_GEOCODING_SUMMARY_CSV = os.path.join(
     RECENT_EMDAT_GEOCODING_OUTPUT_DIR,
     "text_geocoding_summary.csv",
 )
+RECENT_EMDAT_NATURAL_TEXT_GEOCODING_CANDIDATES_CSV = os.path.join(
+    RECENT_EMDAT_GEOCODING_OUTPUT_DIR,
+    "text_geocoding_candidates_natural.csv",
+)
+RECENT_EMDAT_NATURAL_TEXT_GEOCODING_QUERIES_CSV = os.path.join(
+    RECENT_EMDAT_GEOCODING_OUTPUT_DIR,
+    "text_geocoding_queries_natural.csv",
+)
+RECENT_EMDAT_NATURAL_TEXT_GEOCODING_SUMMARY_CSV = os.path.join(
+    RECENT_EMDAT_GEOCODING_OUTPUT_DIR,
+    "text_geocoding_summary_natural.csv",
+)
 GADM_DOWNLOAD_PLAN_CSV = os.path.join(
     RECENT_EMDAT_GEOCODING_OUTPUT_DIR,
     "gadm_download_plan.csv",
 )
+RECENT_EMDAT_NATURAL_DISASTER_TYPES = [
+    "Drought",
+    "Earthquake",
+    "Extreme temperature",
+    "Flood",
+    "Glacial lake outburst flood",
+    "Infestation",
+    "Mass movement (dry)",
+    "Mass movement (wet)",
+    "Storm",
+    "Volcanic activity",
+    "Wildfire",
+]
 
 SATELLITE_DEFAULT_AOI_HALF_SIZE_KM = 10.0
 SATELLITE_DEFAULT_WINDOW_DAYS = 10
