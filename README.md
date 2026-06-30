@@ -162,3 +162,5 @@ abbreviations, accents/apostrophes, and selected administrative-region aliases.
 When a query clearly mentions multiple places, component-level matches are kept
 as `matched_review` because one geocoded point cannot represent all affected
 areas automatically.
+For noisier free-text locations, the same step also removes small context
+phrases and parentheses to create review-only component queries.

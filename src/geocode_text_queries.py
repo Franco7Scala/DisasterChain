@@ -56,21 +56,26 @@ RESULT_COLUMNS = [
     "error",
 ]
 ADMIN_HINT_RE = re.compile(
-    r"\b(?:autonomous region|department|district|governorate|prefecture|"
-    r"province|prov\.|region|state|territory)\b",
+    r"\b(?:autonomous region|city|city area|county|department|district|"
+    r"governorate|municipality|prefecture|province|prov\.|regency|region|"
+    r"state|territory)\b",
     re.IGNORECASE,
 )
 PLACE_QUALIFIER_RE = re.compile(
-    r"\b(?:autonomous region|department|district|governorate|prefecture|"
-    r"province|prov\.|region|state|territory)\b\.?",
+    r"\b(?:autonomous region|city area|city|county|department|district|"
+    r"governorate|municipality|prefecture|province|prov\.|regency|region|"
+    r"state|territory|village)\b\.?",
     re.IGNORECASE,
 )
 ISLAND_ABBREVIATION_RE = re.compile(r"\bisl\.(?=\W|$)", re.IGNORECASE)
 COMPOSITE_ADMIN_RE = re.compile(
     r"^(?P<left>.+?)\s+and\s+(?P<right>.+?)\s+"
-    r"(?P<unit>states|provinces|regions|departments|governorates|districts)$",
+    r"(?P<unit>counties|departments|districts|governorates|islands|"
+    r"provinces|regencies|regions|states|villages)$",
     re.IGNORECASE,
 )
+PARENTHETICAL_RE = re.compile(r"\(([^()]+)\)")
+TRAILING_PARENTHESES_RE = re.compile(r"\s*\([^()]+\)\s*")
 WHITESPACE_RE = re.compile(r"\s+")
 BAD_RESULT_CLASSES = {"amenity", "building", "craft", "historic", "leisure", "office", "shop", "tourism"}
 GOOD_RESULT_CLASSES = {"boundary", "place"}
@@ -93,9 +98,12 @@ PLURAL_ADMIN_UNITS = {
     "departments": "department",
     "districts": "district",
     "governorates": "governorate",
+    "islands": "island",
     "provinces": "province",
+    "regencies": "regency",
     "regions": "region",
     "states": "state",
+    "villages": "village",
 }
 COUNTRY_ALIASES = {
     "bolivia plurinational state of": ["Bolivia"],
@@ -104,8 +112,15 @@ COUNTRY_ALIASES = {
     "tanzania united republic of": ["Tanzania"],
     "venezuela bolivarian republic of": ["Venezuela"],
     "viet nam": ["Vietnam"],
+    "russian federation": ["Russia"],
+    "taiwan province of china": ["Taiwan"],
+    "turkiye": ["Turkey"],
 }
 PLACE_ALIASES = {
+    "bak city area": ["Baku"],
+    "kahele territory": ["Kalehe Territory", "Kalehe"],
+    "north caucasus": ["North Caucasian Federal District"],
+    "northern luzon": ["Luzon"],
     "region de bruxelles capitale brussels hoofdstedelijk gewest": [
         "Brussels Capital Region",
         "Brussels-Capital Region",
@@ -183,9 +198,70 @@ def normalize_text(value: str) -> str:
 
 def compact_text(value: str) -> str:
     text = str(value or "")
-    for apostrophe in ("’", "‘", "`", "´", "ʼ", "â€™", "â€˜"):
-        text = text.replace(apostrophe, "'")
-    return WHITESPACE_RE.sub(" ", text.replace("-", " ")).strip(" ,")
+    replacements = {
+        "\u00e2\u20ac\u0090": "-",
+        "\u00e2\u20ac\u0091": "-",
+        "\u00e2\u20ac\u0092": "-",
+        "\u00e2\u20ac\u0093": "-",
+        "\u00e2\u20ac\u0094": "-",
+        "\u00e2\u20ac\u2122": "'",
+        "\u00e2\u20ac\u02dc": "'",
+        "\u00c2\u00b4": "'",
+        "\u00ca\u00bc": "'",
+        "\u2019": "'",
+        "\u2018": "'",
+        "`": "'",
+        "\u00b4": "'",
+        "\u02bc": "'",
+    }
+    for old, new in replacements.items():
+        text = text.replace(old, new)
+    return WHITESPACE_RE.sub(" ", text.replace("-", " ")).strip(" ,.")
+
+
+def strip_context_phrases(value: str) -> str:
+    text = compact_text(value)
+    text = re.sub(r"^\s*and\s+", "", text, flags=re.IGNORECASE)
+    text = re.sub(r"^\s*north\s+of\s+(?:the\s+)?", "", text, flags=re.IGNORECASE)
+    text = re.sub(r"^\s*(?:the\s+)?town\s+of\s+", "", text, flags=re.IGNORECASE)
+    text = re.sub(r"\s+in\s+the\s+(?:north|south|east|west)$", "", text, flags=re.IGNORECASE)
+    text = re.sub(r"\s+(?:area|areas)$", "", text, flags=re.IGNORECASE)
+    return compact_text(text)
+
+
+def strip_leading_article(value: str) -> str:
+    return compact_text(re.sub(r"^\s*the\s+", "", str(value or ""), flags=re.IGNORECASE))
+
+
+def parenthetical_components(place: str) -> List[str]:
+    components: List[str] = []
+    for match in PARENTHETICAL_RE.findall(str(place or "")):
+        cleaned = strip_context_phrases(match)
+        if cleaned and cleaned not in components:
+            components.append(cleaned)
+    return components
+
+
+def without_parentheses(place: str) -> str:
+    return strip_context_phrases(TRAILING_PARENTHESES_RE.sub(" ", str(place or "")))
+
+
+def add_unique(values: List[str], value: str) -> None:
+    value = strip_context_phrases(value)
+    if value and value not in values:
+        values.append(value)
+
+
+def split_place_list(value: str) -> List[str]:
+    cleaned = without_parentheses(value)
+    chunks = [
+        strip_leading_article(part)
+        for part in re.split(r"\s*,\s*|\s+\band\b\s+", cleaned)
+        if strip_leading_article(part)
+    ]
+    if 1 < len(chunks) <= 5 and all(1 <= len(part.split()) <= 5 for part in chunks):
+        return chunks
+    return []
 
 
 def place_core(value: str) -> str:
@@ -200,11 +276,11 @@ def place_variants(place: str) -> List[str]:
     variants: List[str] = []
 
     def add(value: str) -> None:
-        value = compact_text(value)
-        if value and value not in variants:
-            variants.append(value)
+        add_unique(variants, value)
 
     add(place)
+    add(strip_context_phrases(place))
+    add(without_parentheses(place))
     expanded_island = compact_text(ISLAND_ABBREVIATION_RE.sub("Island", place))
     add(expanded_island)
     for part in re.split(r"\s*/\s*", place):
@@ -229,25 +305,28 @@ def country_variants(country: str) -> List[str]:
 
 
 def composite_place_components(place: str) -> List[str]:
-    place = compact_text(place)
+    original_place = compact_text(place)
+    place = without_parentheses(original_place)
     components: List[str] = []
 
     def add(value: str) -> None:
-        value = compact_text(value)
-        if value and value not in components:
-            components.append(value)
+        add_unique(components, value)
 
     match = COMPOSITE_ADMIN_RE.match(place)
     if match:
         unit = PLURAL_ADMIN_UNITS.get(match.group("unit").lower(), "")
         add(f"{match.group('left')} {unit}")
         add(f"{match.group('right')} {unit}")
+        add(PLACE_QUALIFIER_RE.sub(" ", f"{match.group('left')} {unit}"))
+        add(PLACE_QUALIFIER_RE.sub(" ", f"{match.group('right')} {unit}"))
 
-    if "," in place and "(" not in place and ")" not in place:
-        parts = [part.strip() for part in place.split(",") if part.strip()]
-        if 1 < len(parts) <= 3 and all(len(part.split()) <= 4 for part in parts):
-            for part in parts:
-                add(part)
+    for component in split_place_list(place):
+        add(component)
+        add(PLACE_QUALIFIER_RE.sub(" ", component))
+
+    for component in parenthetical_components(original_place):
+        add(component)
+        add(PLACE_QUALIFIER_RE.sub(" ", component))
 
     return components
 
