@@ -113,6 +113,7 @@ COUNTRY_ALIASES = {
     "venezuela bolivarian republic of": ["Venezuela"],
     "viet nam": ["Vietnam"],
     "russian federation": ["Russia"],
+    "state of palestine": ["Palestine"],
     "taiwan province of china": ["Taiwan"],
     "turkiye": ["Turkey"],
 }
@@ -121,6 +122,7 @@ PLACE_ALIASES = {
     "kahele territory": ["Kalehe Territory", "Kalehe"],
     "north caucasus": ["North Caucasian Federal District"],
     "northern luzon": ["Luzon"],
+    "northern palawan": ["Palawan"],
     "region de bruxelles capitale brussels hoofdstedelijk gewest": [
         "Brussels Capital Region",
         "Brussels-Capital Region",
@@ -135,6 +137,15 @@ PLACE_ALIASES = {
         "Sistan and Baluchestan",
     ],
     "sistan and baluchistan": ["Sistan and Baluchestan"],
+    "sitaro islands regency": [
+        "Siau Tagulandang Biaro Regency",
+        "Siau Tagulandang Biaro",
+        "Sitaro Islands",
+    ],
+    "sitaro islands": ["Siau Tagulandang Biaro", "Sitaro Islands"],
+    "sumatra north": ["North Sumatra"],
+    "santa caterina state": ["Santa Catarina state", "Santa Catarina"],
+    "gaza strip": ["Gaza Strip", "Gaza", "Gaza Governorate"],
     "vlaams gewest": ["Flanders"],
 }
 
@@ -222,6 +233,7 @@ def compact_text(value: str) -> str:
 def strip_context_phrases(value: str) -> str:
     text = compact_text(value)
     text = re.sub(r"^\s*and\s+", "", text, flags=re.IGNORECASE)
+    text = re.sub(r"^\s*near\s+", "", text, flags=re.IGNORECASE)
     text = re.sub(r"^\s*north\s+of\s+(?:the\s+)?", "", text, flags=re.IGNORECASE)
     text = re.sub(r"^\s*(?:the\s+)?town\s+of\s+", "", text, flags=re.IGNORECASE)
     text = re.sub(r"\s+in\s+the\s+(?:north|south|east|west)$", "", text, flags=re.IGNORECASE)
@@ -285,8 +297,9 @@ def place_variants(place: str) -> List[str]:
     add(expanded_island)
     for part in re.split(r"\s*/\s*", place):
         add(part)
-    for alias in alias_values(place, PLACE_ALIASES):
-        add(alias)
+    for variant in list(variants):
+        for alias in alias_values(variant, PLACE_ALIASES):
+            add(alias)
     return variants
 
 
@@ -311,6 +324,8 @@ def composite_place_components(place: str) -> List[str]:
 
     def add(value: str) -> None:
         add_unique(components, value)
+        for alias in alias_values(value, PLACE_ALIASES):
+            add_unique(components, alias)
 
     match = COMPOSITE_ADMIN_RE.match(place)
     if match:
