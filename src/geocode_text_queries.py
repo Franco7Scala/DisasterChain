@@ -64,9 +64,10 @@ ADMIN_HINT_RE = re.compile(
 PLACE_QUALIFIER_RE = re.compile(
     r"\b(?:autonomous region|capital city area|capital city|city area|city|"
     r"counties|county|departments|department|districts|district|"
-    r"governorates|governorate|municipality|prefecture|provinces|province|"
+    r"governorates|governorate|municipalities|municipality|"
+    r"muncipalities|muncipality|prefecture|provinces|province|"
     r"prov\.|regencies|regency|regions|region|states|state|territory|"
-    r"villages|village)\b\.?",
+    r"islands|island|isl\.|town|villages|village)\b\.?",
     re.IGNORECASE,
 )
 ISLAND_ABBREVIATION_RE = re.compile(r"\bisl\.(?=\W|$)", re.IGNORECASE)
@@ -121,9 +122,26 @@ COUNTRY_ALIASES = {
 }
 PLACE_ALIASES = {
     "bak city area": ["Baku"],
+    "chaves county eastern new mexico": ["Chaves County", "Chaves County New Mexico"],
+    "guanacaste puntarenas": ["Guanacaste Province", "Puntarenas Province"],
+    "homs lattakia": ["Homs Governorate", "Latakia Governorate"],
+    "imias and san antonio del sur maisi and baracoa muncipalities": [
+        "Imias Municipality",
+        "San Antonio del Sur Municipality",
+        "Maisi Municipality",
+        "Baracoa Municipality",
+    ],
+    "imias and san antonio del sur maisi and baracoa municipalities": [
+        "Imias Municipality",
+        "San Antonio del Sur Municipality",
+        "Maisi Municipality",
+        "Baracoa Municipality",
+    ],
     "kahele territory": ["Kalehe Territory", "Kalehe"],
+    "letur lbacete provinces": ["Letur", "Letur Albacete", "Albacete Province"],
     "north caucasus": ["North Caucasian Federal District"],
     "northern luzon": ["Luzon"],
+    "northern luzon island": ["Luzon Island", "Luzon"],
     "northern palawan": ["Palawan"],
     "region de bruxelles capitale brussels hoofdstedelijk gewest": [
         "Brussels Capital Region",
@@ -148,8 +166,10 @@ PLACE_ALIASES = {
     "southern sumatra": ["South Sumatra", "Sumatra"],
     "tomasina province": ["Toamasina Province", "Toamasina"],
     "thi qar governorate": ["Dhi Qar Governorate", "Dhi Qar"],
+    "tlacoachistlahuaca town": ["Tlacoachistlahuaca"],
     "sumatra north": ["North Sumatra"],
     "santa caterina state": ["Santa Catarina state", "Santa Catarina"],
+    "sula valley": ["Sula Valley", "Valle de Sula"],
     "gaza strip": ["Gaza Strip", "Gaza", "Gaza Governorate"],
     "gorizia statistical region": ["Goriska Statistical Region"],
     "east marakwet": ["Elgeyo Marakwet", "Elgeyo-Marakwet County"],
@@ -185,6 +205,7 @@ def selected_queries(
     min_rank: Optional[int],
     max_rank: Optional[int],
     only_quality: Set[str],
+    query_contains: List[str],
     force: bool,
 ) -> pd.DataFrame:
     selected = queries.copy()
@@ -194,6 +215,12 @@ def selected_queries(
         selected = selected[selected["query_rank"].astype(int).le(max_rank)]
     if only_quality:
         selected = selected[selected["query_quality"].isin(only_quality)]
+    if query_contains:
+        normalized_terms = [normalize_text(term) for term in query_contains if normalize_text(term)]
+        query_keys = selected["geocoding_query"].fillna("").map(normalize_text)
+        selected = selected[
+            query_keys.map(lambda query: any(term in query for term in normalized_terms))
+        ]
     if not force:
         selected = selected[~selected[QUERY_ID_COLUMN].astype(str).isin(completed_query_ids(existing_results))]
     if limit is not None and limit > 0:
@@ -205,6 +232,12 @@ def csv_set(value: Optional[str]) -> Set[str]:
     if not value:
         return set()
     return {item.strip() for item in value.split(",") if item.strip()}
+
+
+def csv_list(value: Optional[str]) -> List[str]:
+    if not value:
+        return []
+    return [item.strip() for item in value.split(",") if item.strip()]
 
 
 def strip_accents(value: str) -> str:
@@ -316,6 +349,8 @@ def place_variants(place: str) -> List[str]:
     add(without_parentheses(place))
     expanded_island = compact_text(ISLAND_ABBREVIATION_RE.sub("Island", place))
     add(expanded_island)
+    without_qualifier = compact_text(PLACE_QUALIFIER_RE.sub(" ", place))
+    add(without_qualifier)
     for part in re.split(r"\s*/\s*", place):
         add(part)
     for variant in list(variants):
@@ -458,6 +493,8 @@ def candidate_score(candidate: Dict, row: pd.Series, result_rank: int) -> Tuple[
         reasons.append("small_bbox_for_admin_query")
 
     quality = "accepted" if score >= REVIEW_RESULT_SCORE_THRESHOLD else "review"
+    if "small_bbox_for_admin_query" in reasons:
+        quality = "review"
     return score, quality, ",".join(reasons)
 
 
@@ -600,6 +637,20 @@ def geocode_query(
 ) -> Dict:
     best_review = None
     variants = query_variants(row)
+
+    def is_better_review(candidate: Dict, current: Optional[Dict]) -> bool:
+        if current is None:
+            return True
+        try:
+            candidate_score_value = float(candidate.get("result_score") or 0)
+        except (TypeError, ValueError):
+            candidate_score_value = 0.0
+        try:
+            current_score_value = float(current.get("result_score") or 0)
+        except (TypeError, ValueError):
+            current_score_value = 0.0
+        return candidate_score_value > current_score_value
+
     for index, (variant_label, query) in enumerate(variants):
         params = {
             "q": query,
@@ -622,7 +673,10 @@ def geocode_query(
             )
             if result["geocoding_status"] == "matched":
                 return result
-            if result["geocoding_status"] == "matched_review":
+            if result["geocoding_status"] == "matched_review" and is_better_review(
+                result,
+                best_review,
+            ):
                 best_review = result
         except (requests.RequestException, ValueError) as exc:
             return base_result(row, "error", str(exc))
@@ -652,6 +706,14 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--limit", type=int, default=TEXT_GEOCODING_DEFAULT_LIMIT)
     parser.add_argument("--min-rank", type=int)
     parser.add_argument("--max-rank", type=int)
+    parser.add_argument(
+        "--query-contains",
+        default="",
+        help=(
+            "Comma-separated text snippets used to select only matching "
+            "geocoding_query rows. Useful with --force for targeted retests."
+        ),
+    )
     parser.add_argument(
         "--only-quality",
         default="usable",
@@ -691,6 +753,7 @@ def main() -> None:
         min_rank=args.min_rank,
         max_rank=args.max_rank,
         only_quality=csv_set(args.only_quality),
+        query_contains=csv_list(args.query_contains),
         force=args.force,
     )
 
