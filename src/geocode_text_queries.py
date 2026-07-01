@@ -13,6 +13,7 @@ import requests
 from support.constants import (
     NOMINATIM_SEARCH_URL,
     NOMINATIM_USER_AGENT,
+    RECENT_EMDAT_NATURAL_TEXT_GEOCODING_CANDIDATES_CSV,
     RECENT_EMDAT_NATURAL_TEXT_GEOCODING_QUERIES_CSV,
     RECENT_EMDAT_NATURAL_TEXT_GEOCODING_RESULTS_CSV,
     TEXT_GEOCODING_DEFAULT_LIMIT,
@@ -20,7 +21,9 @@ from support.constants import (
 )
 
 
+EVENT_ID_COLUMN = "emdat_disaster_id"
 QUERY_ID_COLUMN = "geocoding_query_id"
+SUCCESSFUL_GEOCODING_STATUSES = {"matched", "matched_review"}
 RESULT_COLUMNS = [
     "geocoding_query_id",
     "query_rank",
@@ -198,6 +201,107 @@ def completed_query_ids(results: pd.DataFrame) -> Set[str]:
     return set(results.loc[done, QUERY_ID_COLUMN].dropna().astype(str))
 
 
+def latest_results(results: pd.DataFrame) -> pd.DataFrame:
+    if results.empty or QUERY_ID_COLUMN not in results.columns:
+        return results.copy()
+    return results.drop_duplicates(subset=[QUERY_ID_COLUMN], keep="last").copy()
+
+
+def successful_query_ids(results: pd.DataFrame) -> Set[str]:
+    results = latest_results(results)
+    if results.empty or "geocoding_status" not in results.columns:
+        return set()
+    successful = results["geocoding_status"].isin(SUCCESSFUL_GEOCODING_STATUSES)
+    return set(results.loc[successful, QUERY_ID_COLUMN].dropna().astype(str))
+
+
+def pending_event_ids(
+    text_candidates: pd.DataFrame,
+    existing_results: pd.DataFrame,
+) -> Set[str]:
+    if text_candidates.empty:
+        return set()
+    all_events = set(text_candidates[EVENT_ID_COLUMN].dropna().astype(str))
+    successful_ids = successful_query_ids(existing_results)
+    if not successful_ids:
+        return all_events
+    query_ids = text_candidates[QUERY_ID_COLUMN].astype(str)
+    covered = set(
+        text_candidates.loc[
+            query_ids.isin(successful_ids),
+            EVENT_ID_COLUMN,
+        ]
+        .dropna()
+        .astype(str)
+    )
+    return all_events - covered
+
+
+def prioritize_pending_event_queries(
+    selected: pd.DataFrame,
+    text_candidates: pd.DataFrame,
+    existing_results: pd.DataFrame,
+    one_query_per_event: bool,
+) -> pd.DataFrame:
+    required = {EVENT_ID_COLUMN, QUERY_ID_COLUMN}
+    if selected.empty or text_candidates.empty or not required.issubset(text_candidates.columns):
+        return selected
+
+    pending_events = pending_event_ids(text_candidates, existing_results)
+    candidate_links = text_candidates[
+        text_candidates[EVENT_ID_COLUMN].astype(str).isin(pending_events)
+    ][[EVENT_ID_COLUMN, QUERY_ID_COLUMN]].dropna()
+    query_to_events = (
+        candidate_links.astype(str)
+        .drop_duplicates()
+        .groupby(QUERY_ID_COLUMN)[EVENT_ID_COLUMN]
+        .apply(lambda values: sorted(set(values)))
+        .to_dict()
+    )
+
+    prioritized = selected.copy()
+    prioritized["_pending_event_ids"] = prioritized[QUERY_ID_COLUMN].astype(str).map(
+        lambda query_id: query_to_events.get(query_id, [])
+    )
+    prioritized["pending_event_count"] = prioritized["_pending_event_ids"].map(len)
+    prioritized["_query_rank_numeric"] = pd.to_numeric(
+        prioritized["query_rank"],
+        errors="coerce",
+    ).fillna(10**9)
+    prioritized["_original_order"] = range(len(prioritized))
+    prioritized = prioritized.sort_values(
+        ["pending_event_count", "_query_rank_numeric", "_original_order"],
+        ascending=[False, True, True],
+    )
+
+    if one_query_per_event:
+        chosen_rows = []
+        postponed_rows = []
+        covered_in_batch: Set[str] = set()
+        for _, row in prioritized.iterrows():
+            events = set(row["_pending_event_ids"])
+            if not events:
+                postponed_rows.append(row)
+                continue
+            new_events = events - covered_in_batch
+            row = row.copy()
+            row["new_pending_event_count"] = len(new_events)
+            if new_events:
+                chosen_rows.append(row)
+                covered_in_batch.update(new_events)
+            else:
+                postponed_rows.append(row)
+        ordered_rows = chosen_rows + postponed_rows
+        prioritized = pd.DataFrame(ordered_rows, columns=list(prioritized.columns) + ["new_pending_event_count"])
+    else:
+        prioritized["new_pending_event_count"] = prioritized["pending_event_count"]
+
+    return prioritized.drop(
+        columns=["_pending_event_ids", "_query_rank_numeric", "_original_order"],
+        errors="ignore",
+    ).reset_index(drop=True)
+
+
 def selected_queries(
     queries: pd.DataFrame,
     existing_results: pd.DataFrame,
@@ -206,6 +310,9 @@ def selected_queries(
     max_rank: Optional[int],
     only_quality: Set[str],
     query_contains: List[str],
+    text_candidates: Optional[pd.DataFrame],
+    prioritize_pending_events: bool,
+    one_query_per_pending_event: bool,
     force: bool,
 ) -> pd.DataFrame:
     selected = queries.copy()
@@ -223,6 +330,14 @@ def selected_queries(
         ]
     if not force:
         selected = selected[~selected[QUERY_ID_COLUMN].astype(str).isin(completed_query_ids(existing_results))]
+    if prioritize_pending_events or one_query_per_pending_event:
+        if text_candidates is not None:
+            selected = prioritize_pending_event_queries(
+                selected=selected,
+                text_candidates=text_candidates,
+                existing_results=existing_results,
+                one_query_per_event=one_query_per_pending_event,
+            )
     if limit is not None and limit > 0:
         selected = selected.head(limit)
     return selected.reset_index(drop=True)
@@ -701,6 +816,10 @@ def parse_args() -> argparse.Namespace:
         )
     )
     parser.add_argument("--queries-csv", default=RECENT_EMDAT_NATURAL_TEXT_GEOCODING_QUERIES_CSV)
+    parser.add_argument(
+        "--text-candidates-csv",
+        default=RECENT_EMDAT_NATURAL_TEXT_GEOCODING_CANDIDATES_CSV,
+    )
     parser.add_argument("--results-csv", default=RECENT_EMDAT_NATURAL_TEXT_GEOCODING_RESULTS_CSV)
     parser.add_argument("--endpoint-url", default=NOMINATIM_SEARCH_URL)
     parser.add_argument("--limit", type=int, default=TEXT_GEOCODING_DEFAULT_LIMIT)
@@ -712,6 +831,22 @@ def parse_args() -> argparse.Namespace:
         help=(
             "Comma-separated text snippets used to select only matching "
             "geocoding_query rows. Useful with --force for targeted retests."
+        ),
+    )
+    parser.add_argument(
+        "--prioritize-pending-events",
+        action="store_true",
+        help=(
+            "Reorder the batch to prioritize queries linked to events that do "
+            "not yet have a matched or matched_review text-geocoding result."
+        ),
+    )
+    parser.add_argument(
+        "--one-query-per-pending-event",
+        action="store_true",
+        help=(
+            "When prioritizing pending events, greedily avoid selecting multiple "
+            "queries for the same still-uncovered event in the same batch."
         ),
     )
     parser.add_argument(
@@ -731,6 +866,7 @@ def parse_args() -> argparse.Namespace:
 def main() -> None:
     args = parse_args()
     queries_path = Path(args.queries_csv)
+    text_candidates_path = Path(args.text_candidates_csv)
     results_path = Path(args.results_csv)
 
     if not queries_path.exists():
@@ -746,6 +882,17 @@ def main() -> None:
         raise SystemExit("Queries CSV missing column(s): " + ", ".join(sorted(missing)))
 
     existing_results = load_existing_results(results_path)
+    text_candidates = None
+    if args.prioritize_pending_events or args.one_query_per_pending_event:
+        if not text_candidates_path.exists():
+            raise SystemExit(f"Text candidates CSV not found: {text_candidates_path}")
+        text_candidates = pd.read_csv(text_candidates_path)
+        missing_text_candidate_columns = {EVENT_ID_COLUMN, QUERY_ID_COLUMN} - set(text_candidates.columns)
+        if missing_text_candidate_columns:
+            raise SystemExit(
+                "Text candidates CSV missing column(s): "
+                + ", ".join(sorted(missing_text_candidate_columns))
+            )
     batch = selected_queries(
         queries=queries,
         existing_results=existing_results,
@@ -754,6 +901,9 @@ def main() -> None:
         max_rank=args.max_rank,
         only_quality=csv_set(args.only_quality),
         query_contains=csv_list(args.query_contains),
+        text_candidates=text_candidates,
+        prioritize_pending_events=args.prioritize_pending_events,
+        one_query_per_pending_event=args.one_query_per_pending_event,
         force=args.force,
     )
 
@@ -766,7 +916,11 @@ def main() -> None:
         print()
         print("Dry run. No external geocoding requests will be made.")
         if len(batch):
-            print(batch[["query_rank", "geocoding_query", "query_quality", "event_count"]].to_string(index=False))
+            columns = ["query_rank", "geocoding_query", "query_quality", "event_count"]
+            for column in ["pending_event_count", "new_pending_event_count"]:
+                if column in batch.columns:
+                    columns.append(column)
+            print(batch[columns].to_string(index=False))
         return
 
     session = requests.Session()

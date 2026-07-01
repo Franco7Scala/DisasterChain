@@ -150,6 +150,15 @@ python src/geocode_text_queries.py --dry-run --limit 20
 python src/geocode_text_queries.py --limit 50
 ```
 
+To prioritize event-level coverage during the next batches:
+
+```bash
+python src/geocode_text_queries.py --dry-run --limit 50 \
+  --prioritize-pending-events --one-query-per-pending-event
+python src/geocode_text_queries.py --limit 50 \
+  --prioritize-pending-events --one-query-per-pending-event
+```
+
 To summarize how many events are recovered after text geocoding:
 
 ```bash
