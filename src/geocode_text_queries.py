@@ -62,9 +62,11 @@ ADMIN_HINT_RE = re.compile(
     re.IGNORECASE,
 )
 PLACE_QUALIFIER_RE = re.compile(
-    r"\b(?:autonomous region|city area|city|county|department|district|"
-    r"governorate|municipality|prefecture|province|prov\.|regency|region|"
-    r"state|territory|village)\b\.?",
+    r"\b(?:autonomous region|capital city area|capital city|city area|city|"
+    r"counties|county|departments|department|districts|district|"
+    r"governorates|governorate|municipality|prefecture|provinces|province|"
+    r"prov\.|regencies|regency|regions|region|states|state|territory|"
+    r"villages|village)\b\.?",
     re.IGNORECASE,
 )
 ISLAND_ABBREVIATION_RE = re.compile(r"\bisl\.(?=\W|$)", re.IGNORECASE)
@@ -146,6 +148,12 @@ PLACE_ALIASES = {
     "sumatra north": ["North Sumatra"],
     "santa caterina state": ["Santa Catarina state", "Santa Catarina"],
     "gaza strip": ["Gaza Strip", "Gaza", "Gaza Governorate"],
+    "gorizia statistical region": ["Goriska Statistical Region"],
+    "east marakwet": ["Elgeyo Marakwet", "Elgeyo-Marakwet County"],
+    "kinshasa capital city area": ["Kinshasa"],
+    "kinshasa capital city": ["Kinshasa"],
+    "lucon isl": ["Luzon Island", "Luzon"],
+    "lucon island": ["Luzon Island", "Luzon"],
     "vlaams gewest": ["Flanders"],
 }
 
@@ -273,6 +281,16 @@ def split_place_list(value: str) -> List[str]:
     ]
     if 1 < len(chunks) <= 5 and all(1 <= len(part.split()) <= 5 for part in chunks):
         return chunks
+    context_chunks = [
+        strip_leading_article(part)
+        for part in re.split(r"\s+\bin\b\s+", cleaned)
+        if strip_leading_article(part)
+    ]
+    if (
+        len(context_chunks) == 2
+        and all(1 <= len(part.split()) <= 5 for part in context_chunks)
+    ):
+        return context_chunks
     return []
 
 
