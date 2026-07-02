@@ -145,6 +145,14 @@ RECENT_EMDAT_NATURAL_TEXT_GEOCODING_EVENT_SUMMARY_CSV = os.path.join(
     RECENT_EMDAT_GEOCODING_OUTPUT_DIR,
     "text_geocoding_event_summary_natural.csv",
 )
+RECENT_EMDAT_NATURAL_TEXT_GEOCODING_REVIEW_QUALITY_CSV = os.path.join(
+    RECENT_EMDAT_GEOCODING_OUTPUT_DIR,
+    "text_geocoding_review_quality_natural.csv",
+)
+RECENT_EMDAT_NATURAL_TEXT_GEOCODING_REVIEW_QUALITY_SUMMARY_CSV = os.path.join(
+    RECENT_EMDAT_GEOCODING_OUTPUT_DIR,
+    "text_geocoding_review_quality_summary_natural.csv",
+)
 GADM_DOWNLOAD_PLAN_CSV = os.path.join(
     RECENT_EMDAT_GEOCODING_OUTPUT_DIR,
     "gadm_download_plan.csv",

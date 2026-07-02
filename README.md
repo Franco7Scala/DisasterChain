@@ -165,6 +165,12 @@ To summarize how many events are recovered after text geocoding:
 python src/summarize_text_geocoding_events.py
 ```
 
+To inspect `matched_review` text geocoding results before accepting them:
+
+```bash
+python src/analyze_text_geocoding_review_quality.py
+```
+
 The geocoder skips queries already stored in the results CSV unless `--force` is
 used. With `--force`, existing rows for the selected queries are replaced rather
 than duplicated. Results marked as `matched_review` need manual inspection before
