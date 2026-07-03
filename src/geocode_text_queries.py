@@ -480,6 +480,11 @@ def shared_admin_unit_components(place: str) -> List[str]:
     return components
 
 
+def has_composite_place(row: pd.Series) -> bool:
+    place = compact_text(row.get("place_name") or "")
+    return bool(shared_admin_unit_components(place) or split_place_list(place))
+
+
 def place_core(value: str) -> str:
     return normalize_text(PLACE_QUALIFIER_RE.sub(" ", str(value or "")))
 
@@ -770,6 +775,15 @@ def result_from_response(
         quality = "review"
         quality_reasons = ",".join(
             reason for reason in [quality_reasons, "split_component_query"] if reason
+        )
+    elif (
+        query_variant != SPLIT_COMPONENT_VARIANT
+        and has_composite_place(row)
+        and quality == "accepted"
+    ):
+        quality = "review"
+        quality_reasons = ",".join(
+            reason for reason in [quality_reasons, "composite_query"] if reason
         )
     return result_from_candidate(
         row=row,
