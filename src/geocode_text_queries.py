@@ -536,7 +536,6 @@ def composite_place_components(place: str) -> List[str]:
     shared_components = shared_admin_unit_components(place)
     for component in shared_components:
         add(component)
-        add(PLACE_QUALIFIER_RE.sub(" ", component))
 
     if not shared_components:
         match = COMPOSITE_ADMIN_RE.match(place)
