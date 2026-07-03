@@ -80,6 +80,12 @@ COMPOSITE_ADMIN_RE = re.compile(
     r"provinces|regencies|regions|states|villages)$",
     re.IGNORECASE,
 )
+SHARED_ADMIN_UNIT_RE = re.compile(
+    r"^(?P<body>.+?)\s+"
+    r"(?P<unit>counties|departments|districts|governorates|islands|"
+    r"provinces|regencies|regions|states|villages)$",
+    re.IGNORECASE,
+)
 PARENTHETICAL_RE = re.compile(r"\(([^()]+)\)")
 TRAILING_PARENTHESES_RE = re.compile(r"\s*\([^()]+\)\s*")
 WHITESPACE_RE = re.compile(r"\s+")
@@ -445,6 +451,35 @@ def split_place_list(value: str) -> List[str]:
     return []
 
 
+def shared_admin_unit_components(place: str) -> List[str]:
+    """Expand lists with a shared trailing admin unit into explicit components."""
+    match = SHARED_ADMIN_UNIT_RE.match(without_parentheses(place))
+    if not match:
+        return []
+
+    unit = PLURAL_ADMIN_UNITS.get(match.group("unit").lower(), "")
+    if not unit:
+        return []
+
+    parts = [
+        strip_leading_article(part)
+        for part in re.split(r"\s*,\s*|\s+\band\b\s+", match.group("body"))
+        if strip_leading_article(part)
+    ]
+    if not 1 < len(parts) <= 6:
+        return []
+    if any(len(part.split()) > 6 for part in parts):
+        return []
+
+    components: List[str] = []
+    for part in parts:
+        if PLACE_QUALIFIER_RE.search(part):
+            add_unique(components, part)
+        else:
+            add_unique(components, f"{part} {unit}")
+    return components
+
+
 def place_core(value: str) -> str:
     return normalize_text(PLACE_QUALIFIER_RE.sub(" ", str(value or "")))
 
@@ -498,17 +533,24 @@ def composite_place_components(place: str) -> List[str]:
         for alias in alias_values(value, PLACE_ALIASES):
             add_unique(components, alias)
 
-    match = COMPOSITE_ADMIN_RE.match(place)
-    if match:
-        unit = PLURAL_ADMIN_UNITS.get(match.group("unit").lower(), "")
-        add(f"{match.group('left')} {unit}")
-        add(f"{match.group('right')} {unit}")
-        add(PLACE_QUALIFIER_RE.sub(" ", f"{match.group('left')} {unit}"))
-        add(PLACE_QUALIFIER_RE.sub(" ", f"{match.group('right')} {unit}"))
-
-    for component in split_place_list(place):
+    shared_components = shared_admin_unit_components(place)
+    for component in shared_components:
         add(component)
         add(PLACE_QUALIFIER_RE.sub(" ", component))
+
+    if not shared_components:
+        match = COMPOSITE_ADMIN_RE.match(place)
+        if match:
+            unit = PLURAL_ADMIN_UNITS.get(match.group("unit").lower(), "")
+            add(f"{match.group('left')} {unit}")
+            add(f"{match.group('right')} {unit}")
+            add(PLACE_QUALIFIER_RE.sub(" ", f"{match.group('left')} {unit}"))
+            add(PLACE_QUALIFIER_RE.sub(" ", f"{match.group('right')} {unit}"))
+
+    if not shared_components:
+        for component in split_place_list(place):
+            add(component)
+            add(PLACE_QUALIFIER_RE.sub(" ", component))
 
     for component in parenthetical_components(original_place):
         add(component)
