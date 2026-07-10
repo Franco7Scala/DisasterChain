@@ -1,0 +1,146 @@
+from __future__ import annotations
+
+from dataclasses import dataclass, field
+from typing import Any, Dict, Optional
+
+
+DEFAULT_REASONER_MODEL = "meta-llama/Llama-3.1-70B-Instruct"
+
+
+@dataclass
+class ReasonerConfig:
+    model_name: str = DEFAULT_REASONER_MODEL
+    device_map: Optional[str] = "auto"
+    torch_dtype: Optional[str] = "auto"
+    trust_remote_code: bool = False
+    token: Optional[str] = None
+    max_new_tokens: int = 128
+    do_sample: bool = False
+    generation_kwargs: Dict[str, Any] = field(default_factory=dict)
+
+
+class Reasoner:
+    """Small reusable HuggingFace LLM wrapper for text-only reasoning tasks."""
+
+    def __init__(
+        self,
+        model_name: str = DEFAULT_REASONER_MODEL,
+        *,
+        device_map: Optional[str] = "auto",
+        torch_dtype: Optional[str] = "auto",
+        trust_remote_code: bool = False,
+        token: Optional[str] = None,
+        max_new_tokens: int = 128,
+        do_sample: bool = False,
+        generation_kwargs: Optional[Dict[str, Any]] = None,
+    ) -> None:
+        self.config = ReasonerConfig(
+            model_name=model_name,
+            device_map=device_map,
+            torch_dtype=torch_dtype,
+            trust_remote_code=trust_remote_code,
+            token=token,
+            max_new_tokens=max_new_tokens,
+            do_sample=do_sample,
+            generation_kwargs=generation_kwargs or {},
+        )
+        self._tokenizer = None
+        self._model = None
+
+    @property
+    def model_name(self) -> str:
+        return self.config.model_name
+
+    def ask(
+        self,
+        prompt: str,
+        *,
+        max_new_tokens: Optional[int] = None,
+        generation_kwargs: Optional[Dict[str, Any]] = None,
+    ) -> str:
+        """Return the model response for a complete prompt/directive."""
+        prompt = str(prompt or "").strip()
+        if not prompt:
+            raise ValueError("prompt must not be empty")
+
+        self._load_model()
+        tokenizer = self._tokenizer
+        model = self._model
+        prompt_text = self._format_prompt(prompt)
+
+        inputs = tokenizer(prompt_text, return_tensors="pt")
+        device = getattr(model, "device", None)
+        if device is not None:
+            inputs = {key: value.to(device) for key, value in inputs.items()}
+
+        generate_kwargs: Dict[str, Any] = {
+            "max_new_tokens": max_new_tokens or self.config.max_new_tokens,
+            "do_sample": self.config.do_sample,
+        }
+        if tokenizer.eos_token_id is not None:
+            generate_kwargs.setdefault("eos_token_id", tokenizer.eos_token_id)
+            generate_kwargs.setdefault("pad_token_id", tokenizer.eos_token_id)
+        generate_kwargs.update(self.config.generation_kwargs)
+        if generation_kwargs:
+            generate_kwargs.update(generation_kwargs)
+
+        output_ids = model.generate(**inputs, **generate_kwargs)
+        prompt_length = inputs["input_ids"].shape[-1]
+        response_ids = output_ids[0][prompt_length:]
+        return tokenizer.decode(response_ids, skip_special_tokens=True).strip()
+
+    def _load_model(self) -> None:
+        if self._model is not None and self._tokenizer is not None:
+            return
+
+        try:
+            import torch
+            from transformers import AutoModelForCausalLM, AutoTokenizer
+        except ImportError as exc:
+            raise RuntimeError(
+                "Reasoner requires HuggingFace transformers and PyTorch. "
+                "Install project requirements on the cluster before using it."
+            ) from exc
+
+        load_kwargs: Dict[str, Any] = {
+            "trust_remote_code": self.config.trust_remote_code,
+        }
+        if self.config.device_map:
+            load_kwargs["device_map"] = self.config.device_map
+        if self.config.token:
+            load_kwargs["token"] = self.config.token
+        if self.config.torch_dtype:
+            if self.config.torch_dtype == "auto":
+                load_kwargs["torch_dtype"] = "auto"
+            else:
+                load_kwargs["torch_dtype"] = getattr(torch, self.config.torch_dtype)
+
+        tokenizer_kwargs: Dict[str, Any] = {
+            "trust_remote_code": self.config.trust_remote_code,
+        }
+        if self.config.token:
+            tokenizer_kwargs["token"] = self.config.token
+
+        self._tokenizer = AutoTokenizer.from_pretrained(
+            self.config.model_name,
+            **tokenizer_kwargs,
+        )
+        if self._tokenizer.pad_token_id is None and self._tokenizer.eos_token_id is not None:
+            self._tokenizer.pad_token = self._tokenizer.eos_token
+
+        self._model = AutoModelForCausalLM.from_pretrained(
+            self.config.model_name,
+            **load_kwargs,
+        )
+        self._model.eval()
+
+    def _format_prompt(self, prompt: str) -> str:
+        tokenizer = self._tokenizer
+        if getattr(tokenizer, "chat_template", None):
+            messages = [{"role": "user", "content": prompt}]
+            return tokenizer.apply_chat_template(
+                messages,
+                tokenize=False,
+                add_generation_prompt=True,
+            )
+        return prompt
