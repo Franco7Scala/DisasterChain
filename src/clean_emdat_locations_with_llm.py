@@ -87,6 +87,16 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--limit", type=int, default=20)
     parser.add_argument("--offset", type=int, default=0)
     parser.add_argument(
+        "--load-in-4bit",
+        action="store_true",
+        help="Load the HuggingFace model with 4-bit quantization.",
+    )
+    parser.add_argument(
+        "--load-in-8bit",
+        action="store_true",
+        help="Load the HuggingFace model with 8-bit quantization.",
+    )
+    parser.add_argument(
         "--dry-run",
         action="store_true",
         help="Only write prompts; do not load or call the LLM.",
@@ -104,18 +114,24 @@ def main() -> None:
     if not args.dry_run:
         reasoner = Reasoner(
             args.model_name,
+            load_in_4bit=args.load_in_4bit,
+            load_in_8bit=args.load_in_8bit,
             max_new_tokens=args.max_new_tokens,
             do_sample=False,
         )
 
     output_rows = []
-    for index, row in rows.iterrows():
+    total_rows = len(rows)
+    for position, (index, row) in enumerate(rows.iterrows(), start=1):
         prompt = build_location_prompt_from_row(row)
         raw_response = ""
         canonical = ""
         if args.dry_run:
             canonical = ""
         else:
+            dis_no = row.get("DisNo.", index)
+            location = row.get("Location", "")
+            print(f"[{position}/{total_rows}] {dis_no}: {location}", flush=True)
             raw_response = reasoner.ask(prompt)
             canonical = normalize_canonical_location_response(raw_response)
 

@@ -14,6 +14,8 @@ class ReasonerConfig:
     torch_dtype: Optional[str] = "auto"
     trust_remote_code: bool = False
     token: Optional[str] = None
+    load_in_4bit: bool = False
+    load_in_8bit: bool = False
     max_new_tokens: int = 128
     do_sample: bool = False
     generation_kwargs: Dict[str, Any] = field(default_factory=dict)
@@ -30,16 +32,22 @@ class Reasoner:
         torch_dtype: Optional[str] = "auto",
         trust_remote_code: bool = False,
         token: Optional[str] = None,
+        load_in_4bit: bool = False,
+        load_in_8bit: bool = False,
         max_new_tokens: int = 128,
         do_sample: bool = False,
         generation_kwargs: Optional[Dict[str, Any]] = None,
     ) -> None:
+        if load_in_4bit and load_in_8bit:
+            raise ValueError("load_in_4bit and load_in_8bit are mutually exclusive")
         self.config = ReasonerConfig(
             model_name=model_name,
             device_map=device_map,
             torch_dtype=torch_dtype,
             trust_remote_code=trust_remote_code,
             token=token,
+            load_in_4bit=load_in_4bit,
+            load_in_8bit=load_in_8bit,
             max_new_tokens=max_new_tokens,
             do_sample=do_sample,
             generation_kwargs=generation_kwargs or {},
@@ -114,6 +122,27 @@ class Reasoner:
                 load_kwargs["torch_dtype"] = "auto"
             else:
                 load_kwargs["torch_dtype"] = getattr(torch, self.config.torch_dtype)
+        if self.config.load_in_4bit or self.config.load_in_8bit:
+            try:
+                from transformers import BitsAndBytesConfig
+            except ImportError as exc:
+                raise RuntimeError(
+                    "Quantized Reasoner loading requires bitsandbytes support. "
+                    "Install project requirements on the cluster before using "
+                    "--load-in-4bit or --load-in-8bit."
+                ) from exc
+
+            if self.config.load_in_4bit:
+                load_kwargs["quantization_config"] = BitsAndBytesConfig(
+                    load_in_4bit=True,
+                    bnb_4bit_compute_dtype=torch.bfloat16,
+                    bnb_4bit_quant_type="nf4",
+                    bnb_4bit_use_double_quant=True,
+                )
+            else:
+                load_kwargs["quantization_config"] = BitsAndBytesConfig(
+                    load_in_8bit=True,
+                )
 
         tokenizer_kwargs: Dict[str, Any] = {
             "trust_remote_code": self.config.trust_remote_code,

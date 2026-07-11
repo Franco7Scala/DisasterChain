@@ -10,3 +10,4 @@ pypdf
 torch
 transformers
 accelerate
+bitsandbytes
