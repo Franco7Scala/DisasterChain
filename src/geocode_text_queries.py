@@ -802,6 +802,7 @@ def result_from_response(
         )
     elif (
         query_variant != SPLIT_COMPONENT_VARIANT
+        and not truthy(row.get("suppress_country_variants"))
         and has_composite_place(row)
         and quality == "accepted"
     ):
