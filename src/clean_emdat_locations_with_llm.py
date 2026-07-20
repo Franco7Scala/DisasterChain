@@ -58,6 +58,7 @@ def selected_rows(frame: pd.DataFrame, args: argparse.Namespace) -> pd.DataFrame
 def output_columns(frame: pd.DataFrame) -> List[str]:
     preferred = [
         "DisNo.",
+        "ISO",
         "Country",
         "Subregion",
         "Region",

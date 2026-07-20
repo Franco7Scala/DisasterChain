@@ -5,14 +5,15 @@ from typing import Mapping
 
 UNKNOWN_LOCATION = "UNKNOWN"
 
-LOCATION_CANONICALIZATION_TEMPLATE = """Extract the single most specific canonical city, district, or region name from the following descriptive location context.
+LOCATION_CANONICALIZATION_TEMPLATE = """Extract the most specific canonical geographic name from the following descriptive location context, and format it perfectly for a Geocoding API.
 
 Rules:
-1. Return ONLY the geographical entity name. Do not include any introductory words, conversational text, or punctuation.
-2. Prefer the most specific usable entity from Location. Use Country/Subregion/Region only as context or fallback.
-3. If multiple locations are mentioned, extract the primary one or the broader district.
-4. Remove all descriptive noise (e.g., "Villages near", "Slums of", "outskirts of", "northern part of").
-5. If no recognizable geographical location can be extracted, output exactly the word "UNKNOWN".
+1. Format the output STRICTLY as: "Specific_Entity, Country". (e.g., "Miami, United States" or "Midwest, United States").
+2. CRITICAL: If the Location is empty, overly generic, or essentially matches the Country/Region name (e.g. Location: "China", Country: "China"), output ONLY the Country name.
+3. Remove all descriptive noise (e.g., "Villages near", "Slums of", "northern part of").
+4. If Puerto Rico is mentioned, treat it as its own distinct country entity (output: "Puerto Rico").
+5. Do not include any introductory words, conversational text, or punctuation outside the requested format.
+6. If absolutely no recognizable geographical location can be extracted, output exactly the word "UNKNOWN".
 
 Descriptive location context:
 Country: {country}
@@ -20,7 +21,7 @@ Subregion: {subregion}
 Region: {region}
 Location: {location}
 
-Canonical name:"""
+Geocoding string:"""
 
 
 def clean_field(value: object) -> str:

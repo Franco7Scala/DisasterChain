@@ -32,6 +32,7 @@ RESULT_COLUMNS = [
     "query_quality",
     "event_count",
     "candidate_row_count",
+    "countrycodes",
     "provider",
     "requested_at_utc",
     "geocoding_status",
@@ -361,6 +362,10 @@ def csv_list(value: Optional[str]) -> List[str]:
     return [item.strip() for item in value.split(",") if item.strip()]
 
 
+def truthy(value) -> bool:
+    return str(value).strip().lower() in {"1", "true", "yes", "y"}
+
+
 def strip_accents(value: str) -> str:
     text = unicodedata.normalize("NFKD", str(value or ""))
     return "".join(char for char in text if not unicodedata.combining(char))
@@ -393,6 +398,21 @@ def compact_text(value: str) -> str:
     for old, new in replacements.items():
         text = text.replace(old, new)
     return WHITESPACE_RE.sub(" ", text.replace("-", " ")).strip(" ,.")
+
+
+def row_countrycodes(row: pd.Series) -> str:
+    for column in ["countrycodes", "country_codes", "country_code", "iso2"]:
+        value = compact_text(row.get(column) or "")
+        if not value:
+            continue
+        codes = [
+            re.sub(r"[^a-z]", "", item.lower())
+            for item in re.split(r"[,;\s]+", value)
+        ]
+        codes = [code for code in codes if len(code) == 2]
+        if codes:
+            return ",".join(dict.fromkeys(codes))
+    return ""
 
 
 def strip_context_phrases(value: str) -> str:
@@ -577,6 +597,9 @@ def query_variants(row: pd.Series) -> List[Tuple[str, str]]:
             variants.append((label, query))
 
     add("original", original_query)
+    if truthy(row.get("suppress_country_variants")):
+        return variants
+
     if place and country:
         for place_variant in place_variants(place):
             for country_variant in country_variants(country):
@@ -689,6 +712,7 @@ def base_result(row: pd.Series, status: str, error: str = "") -> Dict:
         "query_quality": row.get("query_quality", ""),
         "event_count": row.get("event_count", ""),
         "candidate_row_count": row.get("candidate_row_count", ""),
+        "countrycodes": row_countrycodes(row),
         "provider": "nominatim",
         "requested_at_utc": utc_now(),
         "geocoding_status": status,
@@ -829,6 +853,9 @@ def geocode_query(
             "addressdetails": 1,
             "accept-language": "en",
         }
+        countrycodes = row_countrycodes(row)
+        if countrycodes:
+            params["countrycodes"] = countrycodes
         try:
             response = session.get(endpoint_url, params=params, timeout=timeout_seconds)
             response.raise_for_status()
@@ -972,6 +999,9 @@ def main() -> None:
         print("Dry run. No external geocoding requests will be made.")
         if len(batch):
             columns = ["query_rank", "geocoding_query", "query_quality", "event_count"]
+            for column in ["countrycodes", "suppress_country_variants"]:
+                if column in batch.columns:
+                    columns.append(column)
             for column in ["pending_event_count", "new_pending_event_count"]:
                 if column in batch.columns:
                     columns.append(column)
