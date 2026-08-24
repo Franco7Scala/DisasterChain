@@ -24,6 +24,7 @@ Location: {location}
 Geocoding string:"""
 
 
+# Cleans an EM-DAT text field before using it in a location prompt.
 def clean_field(value: object) -> str:
     if value is None:
         return ""
@@ -33,6 +34,7 @@ def clean_field(value: object) -> str:
     return " ".join(text.replace("\n", " ").replace("\r", " ").split())
 
 
+# Builds the prompt used to normalize one descriptive location.
 def build_location_canonicalization_prompt(
     *,
     country: object = "",
@@ -48,6 +50,7 @@ def build_location_canonicalization_prompt(
     )
 
 
+# Builds a location prompt directly from an EM-DAT row.
 def build_location_prompt_from_row(row: Mapping[str, object]) -> str:
     return build_location_canonicalization_prompt(
         country=row.get("Country", ""),
@@ -57,6 +60,7 @@ def build_location_prompt_from_row(row: Mapping[str, object]) -> str:
     )
 
 
+# Keeps only the first clean geographic name returned by the model.
 def normalize_canonical_location_response(response: object) -> str:
     text = clean_field(response)
     if not text:

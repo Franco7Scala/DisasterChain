@@ -31,6 +31,7 @@ ISO3_TO_ISO2_OVERRIDES = {
 }
 
 
+# Reads input data from Excel or CSV.
 def read_table(path: Path) -> pd.DataFrame:
     if not path.exists():
         raise SystemExit(f"Input file not found: {path}")
@@ -39,6 +40,7 @@ def read_table(path: Path) -> pd.DataFrame:
     return pd.read_csv(path)
 
 
+# Builds a real start date from the EM-DAT date columns.
 def build_start_date(frame: pd.DataFrame) -> pd.Series:
     required = {"Start Year", "Start Month", "Start Day"}
     if not required.issubset(frame.columns):
@@ -53,21 +55,25 @@ def build_start_date(frame: pd.DataFrame) -> pd.Series:
     )
 
 
+# Removes accents before creating stable normalized keys.
 def strip_accents(value: str) -> str:
     text = unicodedata.normalize("NFKD", str(value or ""))
     return "".join(char for char in text if not unicodedata.combining(char))
 
 
+# Normalizes text so equivalent queries share the same key.
 def normalized_key(value: str) -> str:
     text = strip_accents(value).lower()
     text = re.sub(r"[^a-z0-9]+", " ", text)
     return WHITESPACE_RE.sub(" ", text).strip()
 
 
+# Creates a stable short id for a geocoding query.
 def query_id(query_key: str) -> str:
     return hashlib.sha1(query_key.encode("utf-8")).hexdigest()[:12]
 
 
+# Converts EM-DAT ISO3 country codes to Nominatim ISO2 countrycodes.
 def iso3_to_iso2(value: object) -> str:
     iso3 = clean_field(value).upper()
     if not iso3:
@@ -82,6 +88,7 @@ def iso3_to_iso2(value: object) -> str:
     return country.alpha_2.lower() if country else ""
 
 
+# Loads the EM-DAT context needed to fill missing LLM output columns.
 def emdat_context(path: Path, start_date: str) -> pd.DataFrame:
     emdat = read_table(path)
     if EVENT_ID_COLUMN not in emdat.columns:
@@ -99,6 +106,7 @@ def emdat_context(path: Path, start_date: str) -> pd.DataFrame:
     return rows[keep].drop_duplicates(EVENT_ID_COLUMN, keep="first")
 
 
+# Converts LLM-cleaned locations into event-level geocoding candidates.
 def event_candidates(llm: pd.DataFrame) -> pd.DataFrame:
     required = {EVENT_ID_COLUMN, "llm_canonical_location"}
     missing = required - set(llm.columns)
@@ -128,6 +136,7 @@ def event_candidates(llm: pd.DataFrame) -> pd.DataFrame:
     return rows
 
 
+# Joins unique non-empty values while preserving their first occurrence.
 def unique_join(values: pd.Series) -> str:
     seen: List[str] = []
     for value in values.dropna().astype(str):
@@ -137,6 +146,7 @@ def unique_join(values: pd.Series) -> str:
     return " | ".join(seen)
 
 
+# Aggregates event candidates into unique Nominatim query rows.
 def build_queries(candidates: pd.DataFrame) -> pd.DataFrame:
     if candidates.empty:
         return pd.DataFrame(
@@ -183,6 +193,7 @@ def build_queries(candidates: pd.DataFrame) -> pd.DataFrame:
     return queries
 
 
+# Builds a compact summary of generated candidates and query rows.
 def build_summary(llm: pd.DataFrame, candidates: pd.DataFrame, queries: pd.DataFrame) -> pd.DataFrame:
     def count_missing_countrycodes(frame: pd.DataFrame) -> int:
         if frame.empty or "countrycodes" not in frame.columns:
@@ -199,6 +210,7 @@ def build_summary(llm: pd.DataFrame, candidates: pd.DataFrame, queries: pd.DataF
     return pd.DataFrame(rows)
 
 
+# Defines the command-line options for preparing Nominatim queries.
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description=(
@@ -215,6 +227,7 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
+# Prepares query and summary CSV files from the LLM location output.
 def main() -> None:
     args = parse_args()
     llm = pd.read_csv(args.llm_csv)

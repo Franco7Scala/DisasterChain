@@ -15,6 +15,7 @@ from support.reasoner import DEFAULT_REASONER_MODEL, Reasoner
 REQUIRED_COLUMNS = {"Country", "Subregion", "Region", "Location"}
 
 
+# Reads EM-DAT data from Excel or CSV.
 def read_table(path: Path) -> pd.DataFrame:
     if not path.exists():
         raise SystemExit(f"Input file not found: {path}")
@@ -23,6 +24,7 @@ def read_table(path: Path) -> pd.DataFrame:
     return pd.read_csv(path)
 
 
+# Builds a real start date from the EM-DAT year, month, and day columns.
 def build_start_date(frame: pd.DataFrame) -> pd.Series:
     required = {"Start Year", "Start Month", "Start Day"}
     if not required.issubset(frame.columns):
@@ -37,6 +39,7 @@ def build_start_date(frame: pd.DataFrame) -> pd.Series:
     )
 
 
+# Selects the rows to process after date, offset, and limit filters.
 def selected_rows(frame: pd.DataFrame, args: argparse.Namespace) -> pd.DataFrame:
     missing = REQUIRED_COLUMNS - set(frame.columns)
     if missing:
@@ -55,6 +58,7 @@ def selected_rows(frame: pd.DataFrame, args: argparse.Namespace) -> pd.DataFrame
     return rows
 
 
+# Keeps the EM-DAT columns that should be copied to the LLM output.
 def output_columns(frame: pd.DataFrame) -> List[str]:
     preferred = [
         "DisNo.",
@@ -68,6 +72,7 @@ def output_columns(frame: pd.DataFrame) -> List[str]:
     return [column for column in preferred if column in frame.columns]
 
 
+# Defines the command-line options for LLM location cleaning.
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description=(
@@ -106,6 +111,7 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
+# Runs the location-cleaning batch and writes the LLM output CSV.
 def main() -> None:
     args = parse_args()
     frame = read_table(Path(args.input_file))

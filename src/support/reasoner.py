@@ -55,10 +55,12 @@ class Reasoner:
         self._tokenizer = None
         self._model = None
 
+    # Returns the HuggingFace model name configured for this reasoner.
     @property
     def model_name(self) -> str:
         return self.config.model_name
 
+    # Loads the model on first use and returns its answer for one prompt.
     def ask(
         self,
         prompt: str,
@@ -66,7 +68,6 @@ class Reasoner:
         max_new_tokens: Optional[int] = None,
         generation_kwargs: Optional[Dict[str, Any]] = None,
     ) -> str:
-        """Return the model response for a complete prompt/directive."""
         prompt = str(prompt or "").strip()
         if not prompt:
             raise ValueError("prompt must not be empty")
@@ -97,6 +98,7 @@ class Reasoner:
         response_ids = output_ids[0][prompt_length:]
         return tokenizer.decode(response_ids, skip_special_tokens=True).strip()
 
+    # Loads tokenizer and model lazily to avoid startup cost in dry runs.
     def _load_model(self) -> None:
         if self._model is not None and self._tokenizer is not None:
             return
@@ -163,6 +165,7 @@ class Reasoner:
         )
         self._model.eval()
 
+    # Applies the model chat template when the tokenizer provides one.
     def _format_prompt(self, prompt: str) -> str:
         tokenizer = self._tokenizer
         if getattr(tokenizer, "chat_template", None):
