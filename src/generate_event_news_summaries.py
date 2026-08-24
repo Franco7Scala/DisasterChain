@@ -12,6 +12,8 @@ from support.event_news_summary import (
     INSUFFICIENT_INFORMATION,
     build_event_news_context,
     build_summary_prompt,
+    clean_text,
+    merge_event_metadata,
     summarize_event_from_news,
 )
 from support.reasoner import DEFAULT_REASONER_MODEL, Reasoner
@@ -28,6 +30,13 @@ DEFAULT_OUTPUT_CSV = DEFAULT_OUTPUT_DIR / "event_news_summaries.csv"
 DEFAULT_COVERAGE_CSV = DEFAULT_OUTPUT_DIR / "event_news_summaries_coverage.csv"
 COVERAGE_COLUMNS = [
     "event_id",
+    "country",
+    "disaster_type",
+    "start_date",
+    "location",
+    "position_source",
+    "latitude",
+    "longitude",
     "news_count",
     "selected_news_count",
     "usable_news_count",
@@ -35,6 +44,15 @@ COVERAGE_COLUMNS = [
     "news_total_chars",
     "news_input_quality",
     "llm_call_status",
+]
+OUTPUT_METADATA_FIELDS = [
+    ("country", ("country", "Country")),
+    ("disaster_type", ("disaster_type", "Disaster Type")),
+    ("start_date", ("start_date", "Start Date", "_llm_start_date")),
+    ("location", ("Location", "emdat_location", "location")),
+    ("position_source", ("position_source",)),
+    ("latitude", ("latitude", "Latitude", "final_latitude")),
+    ("longitude", ("longitude", "Longitude", "final_longitude")),
 ]
 
 
@@ -95,6 +113,36 @@ def read_event_rows(path: Optional[Path]) -> Dict[str, Dict[str, Any]]:
         if event_id:
             rows[event_id] = row.to_dict()
     return rows
+
+
+# Extracts the small metadata block needed to audit summary outputs.
+def output_metadata(
+    record: Mapping[str, Any],
+    event_row: Optional[Mapping[str, Any]] = None,
+) -> Dict[str, str]:
+    metadata = merge_event_metadata(event_row or {}, record)
+    output: Dict[str, str] = {}
+    for output_key, source_keys in OUTPUT_METADATA_FIELDS:
+        output[output_key] = ""
+        for source_key in source_keys:
+            value = clean_text(metadata.get(source_key))
+            if value:
+                output[output_key] = value
+                break
+    return output
+
+
+# Adds audit metadata to rows already stored in JSONL.
+def enrich_jsonl_rows(
+    rows: List[Dict[str, Any]],
+    metadata_by_event: Mapping[str, Mapping[str, str]],
+) -> List[Dict[str, Any]]:
+    enriched_rows: List[Dict[str, Any]] = []
+    for row in rows:
+        event_id = clean_text(row.get("event_id"))
+        metadata = dict(metadata_by_event.get(event_id, {}))
+        enriched_rows.append({"event_id": event_id, **metadata, **row})
+    return enriched_rows
 
 
 # Applies offset and limit so the script can run in resumable batches.
@@ -160,8 +208,9 @@ def write_csv_outputs(
     output_jsonl: Path,
     output_csv: Path,
     coverage_csv: Path,
+    metadata_by_event: Mapping[str, Mapping[str, str]],
 ) -> None:
-    rows = read_jsonl_rows(output_jsonl)
+    rows = enrich_jsonl_rows(read_jsonl_rows(output_jsonl), metadata_by_event)
     output_csv.parent.mkdir(parents=True, exist_ok=True)
     output_frame = pd.DataFrame(rows)
     output_frame.to_csv(output_csv, index=False)
@@ -217,6 +266,10 @@ def main() -> None:
 
     records = read_dataset(input_json)
     event_rows = read_event_rows(event_csv)
+    metadata_by_event = {
+        event_id: output_metadata(record, event_rows.get(event_id))
+        for event_id, record in records
+    }
     selected = selected_records(records, offset=args.offset, limit=args.limit)
 
     if args.force and output_jsonl.exists():
@@ -243,9 +296,10 @@ def main() -> None:
             skipped += 1
             continue
 
+        event_row = event_rows.get(event_id)
         context = build_event_news_context(
             record,
-            event_row=event_rows.get(event_id),
+            event_row=event_row,
             max_articles=args.max_articles,
             max_article_chars=args.max_article_chars,
             max_total_chars=args.max_context_chars,
@@ -254,6 +308,7 @@ def main() -> None:
 
         coverage_row = {
             "event_id": event_id,
+            **output_metadata(record, event_row),
             "news_count": context.get("news_count", 0),
             "selected_news_count": context.get("selected_news_count", 0),
             "usable_news_count": context.get("usable_news_count", 0),
@@ -309,6 +364,7 @@ def main() -> None:
         output_jsonl=output_jsonl,
         output_csv=output_csv,
         coverage_csv=coverage_csv,
+        metadata_by_event=metadata_by_event,
     )
 
     print()
