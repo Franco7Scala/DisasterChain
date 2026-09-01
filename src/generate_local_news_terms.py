@@ -4,6 +4,7 @@ import argparse
 import json
 import re
 import unicodedata
+from collections.abc import Iterable as IterableABC
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Mapping, Tuple
 
@@ -14,7 +15,7 @@ from support.event_news_summary import clean_text, response_json_text
 from support.reasoner import DEFAULT_REASONER_MODEL, Reasoner
 
 
-LOCAL_TERMS_PROMPT_VERSION = "local_news_search_terms_v2"
+LOCAL_TERMS_PROMPT_VERSION = "local_news_search_terms_v3"
 DEFAULT_INPUT_JSON = (
     Path(RESULTS_DIR)
     / "news_reasoning"
@@ -51,11 +52,20 @@ Rules:
 7. Return 3 to 8 distinct terms per country/disaster_type pair.
 8. Do not repeat the same word or produce malformed/repetitive text.
 9. Avoid terms that are too generic by themselves, such as "disaster", "water", "accident", "event", or "heavy".
-10. For transport accidents, include the transport mode in the term, e.g. "road accident", "rail derailment", "plane crash", or their local-language equivalents.
-11. For "Mass movement (wet)", use landslide/mudslide/debris-flow terms, not generic movement or flood terms.
-12. If the best local news language is French, Spanish, Portuguese, English, or Arabic for that country, it is acceptable to use that language.
-13. Keep each term short enough to work in Google News or DuckDuckGo queries.
-14. Preserve accents and local spelling when they are normally used.
+10. EM-DAT disaster types "Road", "Rail", "Air", and "Water" are transport accidents. For "Water", use boat/ferry/ship accident or shipwreck terms, NOT flood terms.
+11. For transport accidents, include the transport mode in the term, e.g. "road accident", "rail derailment", "plane crash", "boat accident", or their local-language equivalents.
+12. For "Mass movement (wet)", use landslide/mudslide/debris-flow terms, not generic movement or flood terms.
+13. Do not produce words in a language or script unless you are confident they are real terms used in news writing. If unsure, omit that country/disaster_type pair.
+14. If the best local news language is French, Spanish, Portuguese, English, or Arabic for that country, it is acceptable to use that language.
+15. Keep each term short enough to work in Google News or DuckDuckGo queries.
+16. Preserve accents and local spelling when they are normally used.
+
+Good examples:
+- China / Road: ["交通事故", "车祸", "道路交通事故", "撞车"]
+- Greece / Water: ["ναυάγιο", "θαλάσσιο ατύχημα", "ατύχημα πλοίου"]
+- India / Mass movement (wet): ["भूस्खलन", "चट्टान खिसकना", "मिट्टी धंसना"]
+- Viet Nam / Flood: ["lũ lụt", "ngập lụt", "lũ quét", "nước lũ"]
+- Peru / Flood: ["inundación", "inundaciones", "desborde", "huaico"]
 
 Required JSON format:
 {{
@@ -95,6 +105,114 @@ GENERIC_SINGLE_TERMS = {
     "mouvement",
     "mass movement",
     "natural disaster",
+    "crime",
+    "aparadh",
+    "offence",
+    "road",
+    "water accident",
+    "water disaster",
+}
+
+BAD_TERM_KEYS = {
+    "avariia na doroge",
+    "dorozhno transportnyi proisshestvie",
+    "avtoavariia",
+    "dorozhnyi incident",
+    "hariga",
+    "taaridh",
+    "avariya",
+    "potamoploio",
+    "kataklismos",
+    "parathalassa",
+    "padkarama",
+}
+
+DISASTER_DENY_TERMS = {
+    "flood": {
+        "landslide",
+        "mudslide",
+        "tanah longsor",
+        "glissement de terrain",
+        "deslizamiento de tierra",
+        "山体滑坡",
+        "泥石流",
+        "भूस्खलन",
+    },
+    "mass movement": {
+        "flood",
+        "flooding",
+        "inundation",
+        "inundación",
+        "inundacion",
+        "inundação",
+        "inundacao",
+        "banjir",
+        "inondation",
+        "crue",
+        "洪水",
+        "水灾",
+        "lũ lụt",
+        "ngập lụt",
+    },
+    "water": {
+        "flood",
+        "flooding",
+        "inundation",
+        "inundación",
+        "inundacion",
+        "inundação",
+        "inundacao",
+        "inondation",
+        "inondations",
+        "débordement",
+        "debordement",
+        "crue",
+        "water",
+        "eau",
+        "agua",
+        "νερό",
+        "πλημμύρα",
+        "κατακλυσμός",
+        "banjir",
+        "air bah",
+        "hujan",
+        "badai",
+        "maji",
+        "mafuriko",
+        "洪水",
+        "水灾",
+        "淹水",
+        "lũ lụt",
+        "ngập lụt",
+        "nước lũ",
+    },
+    "miscellaneous accident": {
+        "crime",
+        "aparadh",
+        "aparadh ki ghatna",
+    },
+}
+
+LATIN_NEWS_LANGUAGES = {
+    "afrikaans",
+    "english",
+    "french",
+    "indonesian",
+    "italian",
+    "portuguese",
+    "spanish",
+    "swahili",
+    "turkish",
+    "vietnamese",
+    "wolof",
+}
+
+SCRIPT_ARTIFACT_CHARS = set("玠么")
+SCRIPT_ARTIFACT_FRAGMENTS = {
+    "الطرريرا",
+    "تنجد",
+    "جادنا",
+    "विपत्र",
 }
 
 
@@ -135,6 +253,25 @@ def term_quality_key(value: Any) -> str:
     return text
 
 
+# Checks whether a term contains Latin letters.
+def has_latin_letters(value: Any) -> bool:
+    return any("LATIN" in unicodedata.name(char, "") for char in str(value or ""))
+
+
+# Checks whether a term contains letters from non-Latin scripts.
+def has_non_latin_letters(value: Any) -> bool:
+    return any(
+        char.isalpha() and "LATIN" not in unicodedata.name(char, "")
+        for char in str(value or "")
+    )
+
+
+# Detects whether the listed languages normally allow Latin-script search terms.
+def allows_latin_terms(languages: Iterable[str]) -> bool:
+    keys = {lookup_key(language) for language in languages if clean_text(language)}
+    return not keys or bool(keys & LATIN_NEWS_LANGUAGES)
+
+
 # Detects malformed terms with the same token repeated several times.
 def has_repeated_token_pattern(term: str) -> bool:
     tokens = term_quality_key(term).split()
@@ -154,24 +291,71 @@ def has_repeated_token_pattern(term: str) -> bool:
     return bool(pairs and max(pairs.count(pair) for pair in set(pairs)) >= 2)
 
 
+# Detects malformed terms with the same character repeated too many times.
+def has_repeated_character_pattern(term: str) -> bool:
+    return bool(re.search(r"([^\W\d_])\1{2,}", unicodedata.normalize("NFKC", term)))
+
+
+# Checks whether a term clearly belongs to a different disaster class.
+def has_wrong_disaster_meaning(term: str, disaster_key: str) -> bool:
+    denied = DISASTER_DENY_TERMS.get(lookup_key(disaster_key), set())
+    term_key = term_quality_key(term)
+    term_lookup = lookup_key(term)
+    return any(
+        denied_term in term_key or denied_term in term_lookup
+        for denied_term in denied
+    )
+
+
 # Keeps only distinct and usable local search terms.
-def clean_local_terms(terms: Iterable[Any]) -> List[str]:
+def clean_local_terms(
+    terms: Iterable[Any],
+    *,
+    disaster_key: str,
+    languages: Iterable[str],
+) -> List[str]:
     cleaned_terms = []
     seen = set()
+    latin_allowed = allows_latin_terms(languages)
 
     for term in terms:
         cleaned = clean_text(term)
         key = term_quality_key(cleaned)
         if not cleaned or key in seen:
             continue
+        if any(char in cleaned for char in SCRIPT_ARTIFACT_CHARS):
+            continue
+        if any(fragment in key for fragment in SCRIPT_ARTIFACT_FRAGMENTS):
+            continue
         if len(cleaned) > 80 or has_repeated_token_pattern(cleaned):
             continue
+        if has_repeated_character_pattern(cleaned):
+            continue
         if lookup_key(cleaned) in GENERIC_SINGLE_TERMS:
+            continue
+        if lookup_key(cleaned) in BAD_TERM_KEYS:
+            continue
+        if has_latin_letters(cleaned) and has_non_latin_letters(cleaned):
+            continue
+        if has_latin_letters(cleaned) and not latin_allowed:
+            continue
+        if has_wrong_disaster_meaning(cleaned, disaster_key):
             continue
         seen.add(key)
         cleaned_terms.append(cleaned)
 
     return cleaned_terms
+
+
+# Normalizes the optional language list returned by the LLM.
+def clean_language_list(value: Any) -> List[str]:
+    if isinstance(value, str):
+        pieces = re.split(r"[,;|/]+", value)
+    elif isinstance(value, IterableABC):
+        pieces = list(value)
+    else:
+        pieces = []
+    return [clean_text(piece) for piece in pieces if clean_text(piece)]
 
 
 # Removes parenthetical EM-DAT qualifiers from disaster types.
@@ -294,12 +478,12 @@ def parse_local_terms_response(response: Any) -> Tuple[List[Dict[str, Any]], str
         country = clean_text(item.get("country"))
         disaster_type = clean_text(item.get("disaster_type"))
         key = clean_text(item.get("disaster_type_key")) or disaster_type_key(disaster_type)
-        terms = clean_local_terms(item.get("terms") or [])
-        languages = [
-            clean_text(language)
-            for language in item.get("primary_languages") or []
-            if clean_text(language)
-        ]
+        languages = clean_language_list(item.get("primary_languages"))
+        terms = clean_local_terms(
+            item.get("terms") or [],
+            disaster_key=key,
+            languages=languages,
+        )
         if not country or not disaster_type or not key or len(terms) < 3:
             dropped += 1
             continue
