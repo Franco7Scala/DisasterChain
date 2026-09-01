@@ -14,7 +14,7 @@ from support.event_news_summary import clean_text, response_json_text
 from support.reasoner import DEFAULT_REASONER_MODEL, Reasoner
 
 
-LOCAL_TERMS_PROMPT_VERSION = "local_news_search_terms_v1"
+LOCAL_TERMS_PROMPT_VERSION = "local_news_search_terms_v2"
 DEFAULT_INPUT_JSON = (
     Path(RESULTS_DIR)
     / "news_reasoning"
@@ -36,20 +36,26 @@ DEFAULT_GROUPS_CSV = (
     / "local_news_search_term_groups_without_news.csv"
 )
 
-LOCAL_TERMS_PROMPT_TEMPLATE = """You are building a local-language news search dictionary for disaster-event retrieval.
+LOCAL_TERMS_PROMPT_TEMPLATE = """You are building a high-precision local-language news search dictionary for disaster-event retrieval.
 
 Task:
-For each country/disaster_type pair, generate short disaster keywords that local newspapers in that country would likely use for this type of event.
+For each country/disaster_type pair, generate short search terms that local newspapers in that country would realistically use for this exact disaster type.
 
 Rules:
 1. Return ONLY raw, valid JSON. Do not include explanations, greetings, markdown, or code fences.
-2. Use the main language or languages commonly used by local news outlets in the country.
-3. Focus on disaster keywords, not country names, city names, dates, or full article titles.
-4. Prefer common journalistic terms over technical jargon.
-5. Return 3 to 8 terms per country/disaster_type pair.
-6. If English is one of the country's main news languages, English terms are acceptable; otherwise prefer non-English local terms.
-7. Keep each term short enough to work in Google News or DuckDuckGo queries.
-8. Preserve accents and local spelling when they are normally used.
+2. Keep "country", "disaster_type", and "disaster_type_key" exactly as provided in the input list.
+3. Use the main language or languages commonly used by local news outlets in the country.
+4. For non-Latin scripts, use the native script, not romanization or pinyin, unless local media commonly use the romanized form.
+5. Focus on disaster keywords, not country names, city names, dates, or full article titles.
+6. Prefer common journalistic terms over technical jargon.
+7. Return 3 to 8 distinct terms per country/disaster_type pair.
+8. Do not repeat the same word or produce malformed/repetitive text.
+9. Avoid terms that are too generic by themselves, such as "disaster", "water", "accident", "event", or "heavy".
+10. For transport accidents, include the transport mode in the term, e.g. "road accident", "rail derailment", "plane crash", or their local-language equivalents.
+11. For "Mass movement (wet)", use landslide/mudslide/debris-flow terms, not generic movement or flood terms.
+12. If the best local news language is French, Spanish, Portuguese, English, or Arabic for that country, it is acceptable to use that language.
+13. Keep each term short enough to work in Google News or DuckDuckGo queries.
+14. Preserve accents and local spelling when they are normally used.
 
 Required JSON format:
 {{
@@ -67,6 +73,29 @@ Required JSON format:
 Country/disaster_type pairs:
 {groups}
 """
+
+GENERIC_SINGLE_TERMS = {
+    "accident",
+    "accidente",
+    "acidente",
+    "disaster",
+    "desastre",
+    "desastre natural",
+    "catastrophe",
+    "catastrophe naturelle",
+    "water",
+    "eau",
+    "agua",
+    "event",
+    "evento",
+    "heavy",
+    "pesado",
+    "bhaari",
+    "movement",
+    "mouvement",
+    "mass movement",
+    "natural disaster",
+}
 
 
 # Loads the event-news dataset saved by the news retrieval pipeline.
@@ -96,6 +125,53 @@ def lookup_key(value: Any) -> str:
     text = text.encode("ascii", "ignore").decode("ascii").lower()
     text = re.sub(r"[^a-z0-9]+", " ", text)
     return re.sub(r"\s+", " ", text).strip()
+
+
+# Normalizes a term only for duplicate and quality checks.
+def term_quality_key(value: Any) -> str:
+    text = unicodedata.normalize("NFKC", str(value or "")).lower()
+    text = re.sub(r"[\"'`´“”‘’]", "", text)
+    text = re.sub(r"\s+", " ", text).strip(" .,;:|/-")
+    return text
+
+
+# Detects malformed terms with the same token repeated several times.
+def has_repeated_token_pattern(term: str) -> bool:
+    tokens = term_quality_key(term).split()
+    if len(tokens) < 3:
+        return False
+    if any(left == right for left, right in zip(tokens, tokens[1:])):
+        return True
+    if any(
+        len(left) >= 4 and len(right) >= 4 and (left.startswith(right) or right.startswith(left))
+        for left, right in zip(tokens, tokens[1:])
+    ):
+        return True
+    if max(tokens.count(token) for token in set(tokens)) >= 3:
+        return True
+
+    pairs = [" ".join(tokens[index : index + 2]) for index in range(len(tokens) - 1)]
+    return bool(pairs and max(pairs.count(pair) for pair in set(pairs)) >= 2)
+
+
+# Keeps only distinct and usable local search terms.
+def clean_local_terms(terms: Iterable[Any]) -> List[str]:
+    cleaned_terms = []
+    seen = set()
+
+    for term in terms:
+        cleaned = clean_text(term)
+        key = term_quality_key(cleaned)
+        if not cleaned or key in seen:
+            continue
+        if len(cleaned) > 80 or has_repeated_token_pattern(cleaned):
+            continue
+        if lookup_key(cleaned) in GENERIC_SINGLE_TERMS:
+            continue
+        seen.add(key)
+        cleaned_terms.append(cleaned)
+
+    return cleaned_terms
 
 
 # Removes parenthetical EM-DAT qualifiers from disaster types.
@@ -182,6 +258,7 @@ def format_groups(groups: Iterable[Mapping[str, Any]]) -> str:
         lines.append(
             f'{index}. country: {group["country"]} | '
             f'disaster_type: {group["disaster_type"]} | '
+            f'disaster_type_key: {group["disaster_type_key"]} | '
             f'event_count: {group["event_count"]} | '
             f'example_location: {location}'
         )
@@ -217,17 +294,13 @@ def parse_local_terms_response(response: Any) -> Tuple[List[Dict[str, Any]], str
         country = clean_text(item.get("country"))
         disaster_type = clean_text(item.get("disaster_type"))
         key = clean_text(item.get("disaster_type_key")) or disaster_type_key(disaster_type)
-        terms = [
-            clean_text(term)
-            for term in item.get("terms") or []
-            if clean_text(term)
-        ]
+        terms = clean_local_terms(item.get("terms") or [])
         languages = [
             clean_text(language)
             for language in item.get("primary_languages") or []
             if clean_text(language)
         ]
-        if not country or not disaster_type or not key or not terms:
+        if not country or not disaster_type or not key or len(terms) < 3:
             dropped += 1
             continue
         rows.append(
