@@ -240,7 +240,7 @@ WORLD_COVER_LCM10_MAX_YEAR = 2026
 #########################################################
 
 # Version 
-NEWS_ENGINE_VERSION = "8.17-filter-generic-wikipedia"
+NEWS_ENGINE_VERSION = "8.18-gdelt-doc"
 
 # Headers
 HEADERS = {
@@ -382,6 +382,7 @@ SOURCE_RELEVANCE_THRESHOLDS = {
     "CIMA Research": 4,
     "MeteoAlarm": 4,
     "Wikipedia": 7,
+    "GDELT DOC 2.0": 6,
     "Google News": 6,
     "DuckDuckGo": 7,
 }
@@ -398,6 +399,7 @@ DIRECT_SOURCE_PRIORITY = {
     "GDACS": 86,
     "WMO": 84,
     "Wikipedia": 70,
+    "GDELT DOC 2.0": 65,
     "Google News": 30,
     "DuckDuckGo": 20,
 }

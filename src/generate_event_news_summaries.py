@@ -7,7 +7,7 @@ from typing import Any, Dict, List, Mapping, Optional, Tuple
 
 import pandas as pd
 
-from support.constants import FINAL_DATASET_OUTPUT_PATH, RESULTS_DIR
+from support.constants import RESULTS_DIR
 from support.event_news_summary import (
     INSUFFICIENT_INFORMATION,
     build_event_news_context,
@@ -25,6 +25,7 @@ DEFAULT_EVENT_CSV = (
     / "emdat_2014_final_llm70b_review_resolved_v2.csv"
 )
 DEFAULT_OUTPUT_DIR = Path(RESULTS_DIR) / "news_reasoning"
+DEFAULT_INPUT_JSON = DEFAULT_OUTPUT_DIR / "final_environmental_causal_dataset_2014_plus_news.json"
 DEFAULT_OUTPUT_JSONL = DEFAULT_OUTPUT_DIR / "event_news_summaries.jsonl"
 DEFAULT_OUTPUT_CSV = DEFAULT_OUTPUT_DIR / "event_news_summaries.csv"
 DEFAULT_COVERAGE_CSV = DEFAULT_OUTPUT_DIR / "event_news_summaries_coverage.csv"
@@ -225,7 +226,7 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="Generate LLM event summaries from retrieved news articles."
     )
-    parser.add_argument("--input-json", default=FINAL_DATASET_OUTPUT_PATH)
+    parser.add_argument("--input-json", default=str(DEFAULT_INPUT_JSON))
     parser.add_argument("--event-csv", default=str(DEFAULT_EVENT_CSV))
     parser.add_argument("--output-jsonl", default=str(DEFAULT_OUTPUT_JSONL))
     parser.add_argument("--output-csv", default=str(DEFAULT_OUTPUT_CSV))

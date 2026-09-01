@@ -5,21 +5,22 @@ import re
 from typing import Any, Dict, Iterable, List, Mapping, Optional, Tuple
 
 
-SUMMARY_PROMPT_VERSION = "event_news_summary_v1"
+SUMMARY_PROMPT_VERSION = "event_news_summary_v2"
+CAUSAL_CHAIN_PROMPT_VERSION = "event_causal_chain_v1"
 INSUFFICIENT_INFORMATION = "INSUFFICIENT_INFORMATION"
 
-SUMMARY_PROMPT_TEMPLATE = """You are analyzing disaster event records and related news articles.
+SUMMARY_PROMPT_TEMPLATE = """You are an expert journalistic summarizer analyzing disaster event records and related news articles.
 
 Task:
-Write a concise factual summary of the disaster event using ONLY the information provided in the event metadata and news articles.
+Write a comprehensive, narrative summary of the disaster event. You must weave the structured event metadata and the unstructured news articles together into a cohesive, flowing paragraph.
 
 Rules:
-1. Do not invent facts, numbers, dates, locations, causes, or impacts.
-2. Prefer information confirmed by multiple news articles or by the event metadata.
-3. Mention the disaster type, location, approximate date, main impacts, and affected population/infrastructure if available.
-4. If the news are limited or partially informative, still summarize what is supported and avoid overclaiming.
-5. If there is not enough information to summarize the event, output exactly: INSUFFICIENT_INFORMATION.
-6. Return only the summary text. Do not include bullet points, headings, explanations, or JSON.
+1. Grounding: Do not invent facts, numbers, dates, locations, causes, or impacts. Base your text ONLY on the provided inputs.
+2. Source Integration (CRITICAL): Use the Event Metadata to anchor the basic facts (date, location, disaster type). You MUST use the News Articles to flesh out the narrative (e.g., the physical evolution of the event, human impact, infrastructure damage, and rescue efforts).
+3. Narrative Style: Write a discursive, encyclopedic paragraph (around 100-150 words). Do not just list metadata facts mechanically. Tell the story of what happened on the ground as reported by the news.
+4. Specificity: Include specific details mentioned in the news, such as weather measurements (e.g., "120mm of rain"), exact areas affected, or casualty estimates, if available.
+5. Incomplete Data: If the news articles are limited, summarize what is supported and avoid overclaiming. If there is absolutely not enough information in both sources to write a summary, output exactly: INSUFFICIENT_INFORMATION.
+6. Output Format: Return ONLY the summary text. Do not include bullet points, headings, introductory phrases, or JSON.
 
 Event metadata:
 {event_metadata}
@@ -28,6 +29,48 @@ News articles:
 {news_articles}
 
 Summary:"""
+
+CAUSAL_CHAIN_PROMPT_TEMPLATE = """You are analyzing disaster event records and related news articles.
+
+Task:
+Extract the causal chain of the disaster event using ONLY the information provided in the event metadata and news articles.
+
+Definition of Causal Chain:
+For this task, a "causal chain" is a direct sequence of interconnected physical and socio-economic events where each step explicitly triggers the next. It typically originates from a meteorological or geological trigger (e.g., Heavy Rain), leads to an intermediate environmental change (e.g., River Overflow, Soil Saturation), and results in a final physical or social impact (e.g., Bridge Collapse, Flooded Homes, Casualties). Exclude purely political or administrative responses (e.g., declaring a state of emergency) unless they are direct causes of further physical impacts.
+
+Rules:
+1. Grounding: Do not invent causal links. Every extracted event must be explicitly supported by the text.
+2. Order: Extract the sequence of relevant causal events in chronological order. If chronology is ambiguous, use a logical cause-to-impact order.
+3. Granularity: Each item must describe ONE causal step (e.g., trigger, intermediate process, or final consequence).
+4. Labeling: Keep "type_event" standardized, short, and reusable as a class label (e.g., "Extreme Precipitation", "Soil Saturation", "Landslide", "Infrastructure Damage", "Displacement").
+5. Description: Keep "description" concise (one short sentence).
+6. Evidence: You MUST provide a short, exact quote from the news articles in the "supporting_quote" field to prove the event occurred.
+7. Fallback: If the causal chain cannot be extracted from the available information, return an empty causal_chain list [].
+8. Output Format: Return ONLY raw, valid JSON. Do not include explanations, greetings, or markdown formatting like `json. Start directly with {{ and end with }}.
+
+Required JSON format:
+{{
+  "causal_chain": [
+    {{
+      "n_event": 1,
+      "type_event": "Extreme Precipitation",
+      "description": "Heavy rainfall of 150mm occurred over 24 hours.",
+      "supporting_quote": "...torrential downpours hit the region on Tuesday..."
+    }},
+    {{
+      "n_event": 2,
+      "type_event": "Landslide",
+      "description": "The saturated soil caused a slope to collapse.",
+      "supporting_quote": "...the weakened hillside gave way, burying homes..."
+    }}
+  ]
+}}
+
+Event metadata:
+{event_metadata}
+
+News articles:
+{news_articles}"""
 
 DEFAULT_METADATA_FIELDS = [
     ("disaster_id", "event_id"),
@@ -293,6 +336,13 @@ def build_summary_prompt(context: Mapping[str, Any]) -> str:
         news_articles=context.get("news_articles", "No usable news articles available."),
     )
 
+# Inserts event metadata and news articles into the causal-chain prompt.
+def build_causal_chain_prompt(context: Mapping[str, Any]) -> str:
+    return CAUSAL_CHAIN_PROMPT_TEMPLATE.format(
+        event_metadata=context.get("event_metadata", "- metadata: unavailable"),
+        news_articles=context.get("news_articles", "No usable news articles available."),
+    )
+
 # Cleans the LLM response and applies the insufficient-information fallback.
 def normalize_summary_response(response: Any) -> str:
     text = clean_text(response)
@@ -303,6 +353,67 @@ def normalize_summary_response(response: Any) -> str:
         text = re.sub(r"\s*```$", "", text)
     text = re.sub(r"^(summary\s*:)\s*", "", text, flags=re.IGNORECASE).strip()
     return text or INSUFFICIENT_INFORMATION
+
+# Extracts the first JSON object from an LLM response.
+def response_json_text(response: Any) -> str:
+    text = clean_text(response)
+    if not text:
+        return ""
+    if text.startswith("```"):
+        text = re.sub(r"^```(?:json)?\s*", "", text, flags=re.IGNORECASE)
+        text = re.sub(r"\s*```$", "", text)
+    start = text.find("{")
+    end = text.rfind("}")
+    if start == -1 or end == -1 or end < start:
+        return ""
+    return text[start : end + 1]
+
+# Normalizes one causal-chain step returned by the LLM.
+def normalize_causal_chain_item(item: Mapping[str, Any], sequence_number: int) -> Optional[Dict[str, Any]]:
+    type_event = clean_text(item.get("type_event"))
+    description = clean_text(item.get("description"))
+    supporting_quote = clean_text(item.get("supporting_quote"))
+    if not type_event or not description or not supporting_quote:
+        return None
+    return {
+        "n_event": sequence_number,
+        "type_event": type_event,
+        "description": description,
+        "supporting_quote": supporting_quote,
+    }
+
+# Parses and validates the causal-chain JSON returned by the LLM.
+def parse_causal_chain_response(response: Any) -> Tuple[List[Dict[str, Any]], str]:
+    json_text = response_json_text(response)
+    if not json_text:
+        return [], "invalid_json"
+
+    try:
+        payload = json.loads(json_text)
+    except json.JSONDecodeError:
+        return [], "invalid_json"
+
+    chain = payload.get("causal_chain")
+    if not isinstance(chain, list):
+        return [], "missing_causal_chain"
+
+    normalized: List[Dict[str, Any]] = []
+    dropped = 0
+    for item in chain:
+        if not isinstance(item, Mapping):
+            dropped += 1
+            continue
+        normalized_item = normalize_causal_chain_item(item, len(normalized) + 1)
+        if normalized_item is None:
+            dropped += 1
+            continue
+        normalized.append(normalized_item)
+
+    if not normalized:
+        return [], "empty_chain"
+    if dropped:
+        return normalized, "parsed_with_dropped_items"
+    return normalized, "parsed"
 
 # Builds the prompt, calls the Reasoner, and returns the summary fields.
 def summarize_event_from_news(
@@ -317,4 +428,23 @@ def summarize_event_from_news(
         "event_summary": normalize_summary_response(raw_response),
         "summary_raw_response": raw_response,
         "summary_prompt_version": SUMMARY_PROMPT_VERSION,
+    }
+
+# Builds the prompt, calls the Reasoner, and returns causal-chain fields.
+def extract_causal_chain_from_news(
+    reasoner: Any,
+    context: Mapping[str, Any],
+    *,
+    max_new_tokens: int = 512,
+) -> Dict[str, Any]:
+    prompt = build_causal_chain_prompt(context)
+    raw_response = reasoner.ask(prompt, max_new_tokens=max_new_tokens)
+    causal_chain, parse_status = parse_causal_chain_response(raw_response)
+    return {
+        "causal_chain": causal_chain,
+        "causal_chain_json": json.dumps({"causal_chain": causal_chain}, ensure_ascii=False),
+        "causal_chain_length": len(causal_chain),
+        "causal_chain_parse_status": parse_status,
+        "causal_chain_raw_response": raw_response,
+        "causal_chain_prompt_version": CAUSAL_CHAIN_PROMPT_VERSION,
     }

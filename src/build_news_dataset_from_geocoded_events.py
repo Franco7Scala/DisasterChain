@@ -122,11 +122,26 @@ def record_from_row(row: Mapping[str, Any], event_id: str) -> Dict[str, Any]:
 
 
 # Checks whether a record already has news from the current news engine version.
-def has_current_news(record: Mapping[str, Any], news_engine_version: str) -> bool:
+def article_count_from_record(record: Mapping[str, Any]) -> int:
     metadata = (record.get("news_data") or {}).get("search_metadata") or {}
+    try:
+        return int(metadata.get("total_articles_retrieved") or 0)
+    except (TypeError, ValueError):
+        return 0
+
+
+# Checks whether a record already has news from the current engine and source mode.
+def has_current_news(
+    record: Mapping[str, Any],
+    news_engine_version: str,
+    source_mode: str,
+) -> bool:
+    metadata = (record.get("news_data") or {}).get("search_metadata") or {}
+    existing_source_mode = metadata.get("source_mode") or "all"
     return (
         bool(record.get("news_data_searched"))
         and metadata.get("news_engine_version") == news_engine_version
+        and existing_source_mode == source_mode
     )
 
 
@@ -160,6 +175,7 @@ def write_progress_csv(records: Mapping[str, Mapping[str, Any]], path: Path) -> 
                     metadata.get("sources_successfully_resolved") or []
                 ),
                 "news_engine_version": metadata.get("news_engine_version", ""),
+                "source_mode": metadata.get("source_mode", ""),
             }
         )
     pd.DataFrame(rows).to_csv(path, index=False)
@@ -180,8 +196,10 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--output-json", default=str(DEFAULT_OUTPUT_JSON))
     parser.add_argument("--progress-csv", default=str(DEFAULT_PROGRESS_CSV))
     parser.add_argument("--offset", type=int, default=0)
-    parser.add_argument("--limit", type=int, default=50)
+    parser.add_argument("--limit", type=int, default=0)
     parser.add_argument("--sleep-seconds", type=float, default=3.0)
+    parser.add_argument("--source-mode", choices=["all", "gdelt-only"], default="all")
+    parser.add_argument("--only-without-news", action="store_true")
     parser.add_argument("--force-news", action="store_true")
     parser.add_argument("--dry-run", action="store_true")
     return parser.parse_args()
@@ -211,6 +229,8 @@ def main() -> None:
     print(f"Selected rows: {len(selected)}")
     print(f"Existing records: {len(records)}")
     print(f"Dry run: {args.dry_run}")
+    print(f"Source mode: {args.source_mode}")
+    print(f"Only without news: {args.only_without_news}")
     print(f"Output JSON: {output_json}")
     print(f"Progress CSV: {progress_csv}")
 
@@ -238,7 +258,19 @@ def main() -> None:
             skipped_missing += 1
             continue
 
-        if not args.dry_run and not args.force_news and has_current_news(record, news_engine_version):
+        if (
+            args.only_without_news
+            and existing
+            and article_count_from_record(existing) > 0
+        ):
+            skipped_existing += 1
+            continue
+
+        if (
+            not args.dry_run
+            and not args.force_news
+            and has_current_news(record, news_engine_version, args.source_mode)
+        ):
             skipped_existing += 1
             continue
 
@@ -266,6 +298,7 @@ def main() -> None:
                 lon=record.get("longitude", ""),
                 location_context=record.get("location_context") or {},
                 reliefweb_appname=RELIEFWEB_APPNAME,
+                source_mode=args.source_mode,
             )
             record["news_data"] = news_payload
             record["news_data_searched"] = True

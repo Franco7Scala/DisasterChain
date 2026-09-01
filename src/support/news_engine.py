@@ -50,7 +50,8 @@ def parse_pubdate(s):
     if not s:
         return None
     for fmt in ["%a, %d %b %Y %H:%M:%S %z", "%a, %d %b %Y %H:%M:%S GMT",
-                "%Y-%m-%dT%H:%M:%SZ", "%Y-%m-%dT%H:%M:%S", "%Y-%m-%d"]:
+                "%Y-%m-%dT%H:%M:%SZ", "%Y-%m-%dT%H:%M:%S",
+                "%Y%m%d%H%M%S", "%Y-%m-%d"]:
         try:
             return datetime.strptime(s.strip(), fmt).replace(tzinfo=None)
         except (ValueError, TypeError):
@@ -1258,6 +1259,11 @@ def filter_and_score_articles(articles, country, start_date, disaster_type,
             country=country,
             start_date=start_date,
             disaster_type=disaster_type,
+            pub_date_str=(
+                article.get("published_date")
+                or article.get("date")
+                or article.get("seendate")
+            ),
             location_context=location_context,
             window_days=90,
         )
@@ -1292,7 +1298,8 @@ def filter_and_score_articles(articles, country, start_date, disaster_type,
 
 def get_all_news_sources(disaster_type, country, start_date, region, lat, lon,
                          reliefweb_appname="Unical-EnvironmentalCausalDataset-432353",
-                         location_context=None):
+                         location_context=None,
+                         source_mode="all"):
     """
     Query all required sources for the specific event.
 
@@ -1304,32 +1311,49 @@ def get_all_news_sources(disaster_type, country, start_date, region, lat, lon,
     source_errors = {}
     location_context = location_context or {}
 
-    global_sources = [
-        ("ReliefWeb", lambda: query_reliefweb(
-            disaster_type, country, start_date, reliefweb_appname,
-            location_context=location_context)),
-        ("GDACS", lambda: query_gdacs(disaster_type, country, start_date)),
-        ("NASA Earth Observatory/EONET", lambda: query_nasa_eonet(
-            disaster_type, country, start_date)),
-        ("Wikipedia", lambda: query_wikipedia(
-            disaster_type, country, start_date, location_context=location_context)),
-        ("Google News RSS", lambda: query_google_news(
-            disaster_type, country, start_date, location_context=location_context)),
-        ("IFRC GO", lambda: query_ifrc_go(disaster_type, country, start_date)),
-        ("ERCC portal", lambda: query_ercc(disaster_type, country, start_date)),
-        ("FloodList", lambda: query_floodlist(
-            disaster_type, country, start_date, location_context=location_context)),
-        ("WMO", lambda: query_wmo(disaster_type, country, start_date)),
-    ]
+    if source_mode == "gdelt-only":
+        global_sources = [
+            ("GDELT DOC 2.0", lambda: query_gdelt_doc(
+                disaster_type,
+                country,
+                start_date,
+                location_context=location_context,
+            )),
+        ]
+        regional_sources = []
+    else:
+        global_sources = [
+            ("ReliefWeb", lambda: query_reliefweb(
+                disaster_type, country, start_date, reliefweb_appname,
+                location_context=location_context)),
+            ("GDACS", lambda: query_gdacs(disaster_type, country, start_date)),
+            ("NASA Earth Observatory/EONET", lambda: query_nasa_eonet(
+                disaster_type, country, start_date)),
+            ("Wikipedia", lambda: query_wikipedia(
+                disaster_type, country, start_date, location_context=location_context)),
+            ("Google News RSS", lambda: query_google_news(
+                disaster_type, country, start_date, location_context=location_context)),
+            ("GDELT DOC 2.0", lambda: query_gdelt_doc(
+                disaster_type,
+                country,
+                start_date,
+                location_context=location_context,
+            )),
+            ("IFRC GO", lambda: query_ifrc_go(disaster_type, country, start_date)),
+            ("ERCC portal", lambda: query_ercc(disaster_type, country, start_date)),
+            ("FloodList", lambda: query_floodlist(
+                disaster_type, country, start_date, location_context=location_context)),
+            ("WMO", lambda: query_wmo(disaster_type, country, start_date)),
+        ]
 
-    regional_sources = [
-        ("ADPC/AHA Centre", lambda: query_adpc(disaster_type, country, start_date)),
-        ("Africa Hazards Watch/SADRI", lambda: query_africa_hazards(
-            disaster_type, country, start_date)),
-        ("PAHO/NOAA", lambda: query_paho_noaa(disaster_type, country, start_date)),
-        ("CIMA Research Foundation/MeteoAlarm", lambda: query_cima_meteoalarm(
-            disaster_type, country, start_date)),
-    ]
+        regional_sources = [
+            ("ADPC/AHA Centre", lambda: query_adpc(disaster_type, country, start_date)),
+            ("Africa Hazards Watch/SADRI", lambda: query_africa_hazards(
+                disaster_type, country, start_date)),
+            ("PAHO/NOAA", lambda: query_paho_noaa(disaster_type, country, start_date)),
+            ("CIMA Research Foundation/MeteoAlarm", lambda: query_cima_meteoalarm(
+                disaster_type, country, start_date)),
+        ]
 
     for source_name, query_fn in global_sources + regional_sources:
         try:
@@ -1356,7 +1380,7 @@ def get_all_news_sources(disaster_type, country, start_date, region, lat, lon,
     articles = deduplicate_prefer_direct_sources(deduplicate(articles))
     duckduckgo_used = False
 
-    if len(articles) == 0:
+    if len(articles) == 0 and source_mode != "gdelt-only":
         duckduckgo_used = True
         try:
             ddg_articles = filter_and_score_articles(
@@ -1382,6 +1406,12 @@ def get_all_news_sources(disaster_type, country, start_date, region, lat, lon,
             "articles": ddg_articles,
         }
         articles = deduplicate_prefer_direct_sources(deduplicate(ddg_articles))
+    elif source_mode != "gdelt-only":
+        source_results["DuckDuckGo"] = {
+            "queried": False,
+            "articles_retrieved": 0,
+            "articles": [],
+        }
     else:
         source_results["DuckDuckGo"] = {
             "queried": False,
@@ -1402,6 +1432,7 @@ def get_all_news_sources(disaster_type, country, start_date, region, lat, lon,
             "total_articles_retrieved": len(articles),
             "sources_successfully_resolved": resolved,
             "source_errors": source_errors,
+            "source_mode": source_mode,
             "final_articles_filtered": len(filtered_articles),
             "filtered_google_news_articles": len([
                 article for article in filtered_articles
@@ -1690,6 +1721,148 @@ def build_event_search_queries(disaster_type, country, start_date,
     add(f'{country_name} {clean_type} {year}{date_filter}')
 
     return queries[:max_queries]
+
+
+def _gdelt_datetime_window(start_date, days_before=10, days_after=60):
+    try:
+        event_dt = datetime.strptime(start_date, "%Y-%m-%d")
+    except Exception:
+        return "", ""
+    start_dt = event_dt - timedelta(days=days_before)
+    end_dt = event_dt + timedelta(days=days_after)
+    return start_dt.strftime("%Y%m%d%H%M%S"), end_dt.strftime("%Y%m%d%H%M%S")
+
+
+def _gdelt_query_term(term):
+    cleaned = normalize_whitespace(term).replace('"', " ")
+    cleaned = normalize_whitespace(cleaned)
+    if not cleaned:
+        return ""
+    if re.search(r"\s", cleaned):
+        return f'"{cleaned}"'
+    return cleaned
+
+
+def _gdelt_or_block(terms):
+    pieces = [_gdelt_query_term(term) for term in terms]
+    pieces = [piece for piece in pieces if piece]
+    if not pieces:
+        return ""
+    if len(pieces) == 1:
+        return pieces[0]
+    return "(" + " OR ".join(pieces) + ")"
+
+
+def build_gdelt_doc_queries(disaster_type, country, location_context=None,
+                            max_queries=8):
+    hazard_block = _gdelt_or_block(_compact_terms(get_synonyms(disaster_type), limit=5))
+    country_name = _country_variants(country)[0]
+    country_term = _gdelt_query_term(country_name)
+    event_terms = _compact_terms(_event_terms(location_context, include_aliases=True), limit=4)
+    location_terms = _compact_terms(_location_terms(location_context), limit=5)
+
+    queries = []
+
+    def add(*parts):
+        query = normalize_whitespace(" ".join(part for part in parts if part))
+        if query and query.lower() not in {item.lower() for item in queries}:
+            queries.append(query)
+
+    for event in event_terms:
+        add(_gdelt_query_term(event), country_term, hazard_block)
+
+    for place in location_terms:
+        add(_gdelt_query_term(place), country_term, hazard_block)
+
+    add(country_term, hazard_block)
+    return queries[:max_queries]
+
+
+def query_gdelt_doc(disaster_type, country, start_date, location_context=None,
+                    max_records=25):
+    """
+    Query GDELT DOC 2.0 ArticleList around the event date.
+
+    GDELT searches machine-translated global coverage, so English disaster
+    terms can retrieve local-language articles when they are in the index.
+    """
+    startdatetime, enddatetime = _gdelt_datetime_window(start_date)
+    if not startdatetime or not enddatetime:
+        log_source("GDELT DOC 2.0", 0)
+        return []
+
+    results = []
+    seen = set()
+
+    for query in build_gdelt_doc_queries(
+        disaster_type,
+        country,
+        location_context=location_context,
+    ):
+        r = safe_get(
+            "https://api.gdeltproject.org/api/v2/doc/doc",
+            params={
+                "query": query,
+                "mode": "artlist",
+                "format": "json",
+                "maxrecords": max_records,
+                "sort": "datedesc",
+                "startdatetime": startdatetime,
+                "enddatetime": enddatetime,
+            },
+            headers=HEADERS_JSON,
+            timeout=15,
+            retries=2,
+        )
+        if r is None:
+            continue
+
+        try:
+            payload = r.json()
+        except Exception:
+            continue
+
+        for item in payload.get("articles") or []:
+            if not isinstance(item, dict):
+                continue
+
+            title = clean_html(item.get("title", ""))
+            url = item.get("url") or item.get("url_mobile") or ""
+            if not title or not url:
+                continue
+
+            key = url.rstrip("/") or title.lower()
+            if key in seen:
+                continue
+
+            published = item.get("seendate") or item.get("date") or ""
+            domain = item.get("domain") or ""
+            language = item.get("language") or item.get("sourcelang") or ""
+            source_country = (
+                item.get("sourcecountry")
+                or item.get("sourceCountry")
+                or item.get("source_country")
+                or ""
+            )
+            raw_text = normalize_whitespace(
+                " ".join(
+                    str(part)
+                    for part in [title, domain, language, source_country]
+                    if part
+                )
+            )
+
+            article = make_article("GDELT DOC 2.0", title, url, raw_text)
+            article["published_date"] = published
+            article["domain"] = domain
+            article["language"] = language
+            article["source_country"] = source_country
+            article["search_query"] = query
+            seen.add(key)
+            results.append(article)
+
+    log_source("GDELT DOC 2.0", len(results))
+    return deduplicate(results)
 
 
 def _floodlist_article_url(slug):
