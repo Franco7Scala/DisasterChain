@@ -15,7 +15,7 @@ from support.event_news_summary import clean_text, response_json_text
 from support.reasoner import DEFAULT_REASONER_MODEL, Reasoner
 
 
-LOCAL_TERMS_PROMPT_VERSION = "local_news_search_terms_v4"
+LOCAL_TERMS_PROMPT_VERSION = "local_news_search_terms_v5"
 DEFAULT_INPUT_JSON = (
     Path(RESULTS_DIR)
     / "news_reasoning"
@@ -127,6 +127,17 @@ GENERIC_SINGLE_TERMS = {
     "majimaji",
     "maji makubwa",
     "kifo cha gari",
+    "chute",
+    "chutes",
+    "umusozi",
+    "imvura y umusozi",
+    "umuyaga",
+    "umuyaga mubi",
+    "imvura y umuyaga",
+    "umuyaga wa mizigo",
+    "ikibazo cy umuhanda",
+    "derailmento",
+    "inundacaes",
 }
 
 BAD_TERM_KEYS = {
@@ -225,12 +236,15 @@ LATIN_NEWS_LANGUAGES = {
 
 UNRELIABLE_NON_LATIN_LANGUAGES = {
     "armenian",
+    "dzongkha",
     "khmer",
 }
 
 SCRIPT_ARTIFACT_CHARS = set("玠么")
 SCRIPT_ARTIFACT_FRAGMENTS = {
     "الطرريرا",
+    "حوادثه",
+    "حوادثة",
     "تنجد",
     "جادنا",
     "विपत्र",
