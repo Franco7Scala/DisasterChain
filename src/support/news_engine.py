@@ -13,6 +13,7 @@ Main behavior:
 import requests
 import urllib.parse
 import html as html_lib
+import unicodedata
 from datetime import datetime, timedelta
 from support.constants import *
 from support.extra import _resolve_and_extract_text as _extra_resolve_and_extract_text
@@ -97,13 +98,56 @@ def get_synonyms(disaster_type):
     return [clean]
 
 
+def _lookup_key(text):
+    text = unicodedata.normalize("NFKD", str(text or ""))
+    text = text.encode("ascii", "ignore").decode("ascii").lower()
+    text = re.sub(r"[^a-z0-9]+", " ", text)
+    return re.sub(r"\s+", " ", text).strip()
+
+
+def _disaster_lookup_key(disaster_type):
+    return _lookup_key(str(disaster_type or "").split("(")[0])
+
+
+def _term_records(local_news_terms):
+    if not local_news_terms:
+        return []
+    if isinstance(local_news_terms, dict):
+        records = local_news_terms.get("local_terms") or local_news_terms.get("terms") or []
+    else:
+        records = local_news_terms
+    return [record for record in records if isinstance(record, dict)]
+
+
+def local_news_terms_for_event(local_news_terms, country, disaster_type):
+    country_key = _lookup_key(country)
+    disaster_key = _disaster_lookup_key(disaster_type)
+    terms = []
+
+    for record in _term_records(local_news_terms):
+        record_country = _lookup_key(record.get("country"))
+        record_disaster = (
+            _lookup_key(record.get("disaster_type_key"))
+            or _disaster_lookup_key(record.get("disaster_type"))
+        )
+        if record_country != country_key or record_disaster != disaster_key:
+            continue
+        for term in record.get("terms") or []:
+            cleaned = normalize_whitespace(term)
+            if cleaned and cleaned.lower() not in {item.lower() for item in terms}:
+                terms.append(cleaned)
+
+    return terms
+
+
 # ============================================================
 # HELPER: GENERIC GOOGLE NEWS RSS 
 # Used by query_google_news() and query_floodlist().
 # ============================================================
 
 def _google_news_rss(query, country, start_date, disaster_type,
-                     window_days=30, max_results=5, source_label="Google News"):
+                     window_days=30, max_results=5, source_label="Google News",
+                     location_context=None, extra_hazard_terms=None):
     """
     Query Google News RSS with the provided query.
     Filter results through is_relevant() using feed publication dates.
@@ -146,7 +190,9 @@ def _google_news_rss(query, country, start_date, disaster_type,
         link   = link_m.group(1).strip() if link_m else ""
 
         if not is_relevant(title, title, country, start_date, disaster_type,
-                           pub_date_str=pub, window_days=window_days):
+                           pub_date_str=pub, window_days=window_days,
+                           location_context=location_context,
+                           extra_hazard_terms=extra_hazard_terms):
             continue
 
         seen.add(norm)
@@ -157,6 +203,7 @@ def _google_news_rss(query, country, start_date, disaster_type,
             fallback_text=fallback_text,
         )
         article = make_article(label, title, final_link, full_text)
+        article["published_date"] = pub
         if len(full_text) > len(fallback_text):
             article["raw_text_status"] = "fetched_full_text"
             article["raw_text_url"] = final_link
@@ -657,7 +704,8 @@ def query_google_news(disaster_type, country, start_date, location_context=None)
             time.sleep(2)  # delay between successive queries to avoid 429
         found = _google_news_rss(q, country, start_date, disaster_type,
                                  window_days=21, max_results=5,
-                                 source_label="Google News")
+                                 source_label="Google News",
+                                 location_context=location_context)
         results.extend(found)
         if results:
             break
@@ -1248,7 +1296,8 @@ def _article_confidence(article, scoring, threshold):
 
 
 def filter_and_score_articles(articles, country, start_date, disaster_type,
-                              location_context=None):
+                              location_context=None,
+                              extra_hazard_terms=None):
     scored_articles = []
     for article in articles:
         is_non_article = _is_non_article_result(article)
@@ -1266,6 +1315,7 @@ def filter_and_score_articles(articles, country, start_date, disaster_type,
             ),
             location_context=location_context,
             window_days=90,
+            extra_hazard_terms=extra_hazard_terms,
         )
         threshold = _article_relevance_threshold(article, scoring["threshold"])
         if scoring["score"] < threshold:
@@ -1299,7 +1349,8 @@ def filter_and_score_articles(articles, country, start_date, disaster_type,
 def get_all_news_sources(disaster_type, country, start_date, region, lat, lon,
                          reliefweb_appname="Unical-EnvironmentalCausalDataset-432353",
                          location_context=None,
-                         source_mode="all"):
+                         source_mode="all",
+                         local_news_terms=None):
     """
     Query all required sources for the specific event.
 
@@ -1310,6 +1361,11 @@ def get_all_news_sources(disaster_type, country, start_date, region, lat, lon,
     source_results = {}
     source_errors = {}
     location_context = location_context or {}
+    local_search_terms = local_news_terms_for_event(
+        local_news_terms,
+        country,
+        disaster_type,
+    )
 
     if source_mode == "gdelt-only":
         global_sources = [
@@ -1318,6 +1374,24 @@ def get_all_news_sources(disaster_type, country, start_date, region, lat, lon,
                 country,
                 start_date,
                 location_context=location_context,
+            )),
+        ]
+        regional_sources = []
+    elif source_mode == "local-news-only":
+        global_sources = [
+            ("Google News Local", lambda: query_google_news_local(
+                disaster_type,
+                country,
+                start_date,
+                location_context=location_context,
+                local_search_terms=local_search_terms,
+            )),
+            ("DuckDuckGo Local", lambda: query_duckduckgo_local(
+                disaster_type,
+                country,
+                start_date,
+                location_context=location_context,
+                local_search_terms=local_search_terms,
             )),
         ]
         regional_sources = []
@@ -1363,6 +1437,7 @@ def get_all_news_sources(disaster_type, country, start_date, region, lat, lon,
                 start_date=start_date,
                 disaster_type=disaster_type,
                 location_context=location_context,
+                extra_hazard_terms=local_search_terms if source_mode == "local-news-only" else None,
             )
         except Exception as exc:
             found = []
@@ -1380,7 +1455,7 @@ def get_all_news_sources(disaster_type, country, start_date, region, lat, lon,
     articles = deduplicate_prefer_direct_sources(deduplicate(articles))
     duckduckgo_used = False
 
-    if len(articles) == 0 and source_mode != "gdelt-only":
+    if len(articles) == 0 and source_mode == "all":
         duckduckgo_used = True
         try:
             ddg_articles = filter_and_score_articles(
@@ -1406,7 +1481,7 @@ def get_all_news_sources(disaster_type, country, start_date, region, lat, lon,
             "articles": ddg_articles,
         }
         articles = deduplicate_prefer_direct_sources(deduplicate(ddg_articles))
-    elif source_mode != "gdelt-only":
+    elif source_mode == "all":
         source_results["DuckDuckGo"] = {
             "queried": False,
             "articles_retrieved": 0,
@@ -1433,6 +1508,7 @@ def get_all_news_sources(disaster_type, country, start_date, region, lat, lon,
             "sources_successfully_resolved": resolved,
             "source_errors": source_errors,
             "source_mode": source_mode,
+            "local_search_terms": local_search_terms,
             "final_articles_filtered": len(filtered_articles),
             "filtered_google_news_articles": len([
                 article for article in filtered_articles
@@ -1721,6 +1797,158 @@ def build_event_search_queries(disaster_type, country, start_date,
     add(f'{country_name} {clean_type} {year}{date_filter}')
 
     return queries[:max_queries]
+
+
+def build_local_language_query_specs(disaster_type, country, start_date,
+                                     location_context=None,
+                                     local_search_terms=None,
+                                     include_date_filter=False,
+                                     max_queries=18):
+    year, _, month_name, _ = parse_date_parts(start_date)
+    country_name = _country_variants(country)[0]
+    event_terms = _compact_terms(_event_terms(location_context, include_aliases=True), limit=4)
+    location_terms = _compact_terms(_location_terms(location_context), limit=6)
+    hazard_terms = _compact_terms(local_search_terms or [], limit=8)
+
+    date_filter = ""
+    if include_date_filter:
+        try:
+            event_dt = datetime.strptime(start_date, "%Y-%m-%d")
+            after_dt = (event_dt - timedelta(days=30)).strftime("%Y-%m-%d")
+            before_dt = (event_dt + timedelta(days=60)).strftime("%Y-%m-%d")
+            date_filter = f" after:{after_dt} before:{before_dt}"
+        except Exception:
+            date_filter = ""
+
+    specs = []
+
+    def add(query, precision):
+        normalized = re.sub(r"\s+", " ", query).strip()
+        if not normalized:
+            return
+        if normalized.lower() not in {item["query"].lower() for item in specs}:
+            specs.append({"query": normalized, "precision": precision})
+
+    for event in event_terms:
+        for term in hazard_terms[:4]:
+            add(f'"{event}" "{country_name}" "{term}" {year}{date_filter}', "high")
+            add(f'"{event}" "{term}" {year}{date_filter}', "high")
+
+    for place in location_terms:
+        for term in hazard_terms[:5]:
+            add(f'"{place}" "{country_name}" "{term}" {month_name} {year}{date_filter}', "high")
+            add(f'"{place}" "{country_name}" "{term}" {year}{date_filter}', "high")
+            add(f'"{place}" "{term}" {year}{date_filter}', "medium")
+
+    for term in hazard_terms:
+        add(f'"{country_name}" "{term}" "{month_name}" {year}{date_filter}', "medium")
+        add(f'"{country_name}" "{term}" {year}{date_filter}', "low")
+
+    return specs[:max_queries]
+
+
+def query_google_news_local(disaster_type, country, start_date,
+                            location_context=None, local_search_terms=None):
+    local_terms = _compact_terms(local_search_terms or [], limit=8)
+    if not local_terms:
+        log_source("Google News Local", 0)
+        return []
+
+    query_specs = build_local_language_query_specs(
+        disaster_type,
+        country,
+        start_date,
+        location_context=location_context,
+        local_search_terms=local_terms,
+        include_date_filter=True,
+        max_queries=10,
+    )
+
+    results = []
+    for i, spec in enumerate(query_specs):
+        if i > 0:
+            time.sleep(2)
+        found = _google_news_rss(
+            spec["query"],
+            country,
+            start_date,
+            disaster_type,
+            window_days=90,
+            max_results=5,
+            source_label="Google News Local",
+            location_context=location_context,
+            extra_hazard_terms=local_terms,
+        )
+        for article in found:
+            article["search_query"] = spec["query"]
+            article["query_precision"] = spec["precision"]
+            article["local_search_terms"] = " | ".join(local_terms)
+        results.extend(found)
+        if results:
+            break
+
+    log_source("Google News Local", len(results))
+    return deduplicate(results)
+
+
+def query_duckduckgo_local(disaster_type, country, start_date,
+                           location_context=None, local_search_terms=None):
+    local_terms = _compact_terms(local_search_terms or [], limit=8)
+    if not local_terms:
+        log_source("DuckDuckGo Local", 0)
+        return []
+
+    results = []
+    seen = set()
+    query_specs = build_local_language_query_specs(
+        disaster_type,
+        country,
+        start_date,
+        location_context=location_context,
+        local_search_terms=local_terms,
+        include_date_filter=False,
+        max_queries=18,
+    )
+
+    for spec in query_specs:
+        q = spec["query"]
+        r = safe_get("https://html.duckduckgo.com/html/",
+                     params={"q": q}, headers=HEADERS)
+        if r is None:
+            continue
+
+        for title, link, snippet in _parse_duckduckgo_results(r.text):
+            key = link.rstrip("/") or title.lower()
+            if key in seen:
+                continue
+            seen.add(key)
+
+            raw_text = " ".join(part for part in [title, snippet] if part)
+            if is_relevant(
+                title,
+                raw_text,
+                country,
+                start_date,
+                disaster_type,
+                window_days=90,
+                location_context=location_context,
+                extra_hazard_terms=local_terms,
+            ):
+                article = make_article("DuckDuckGo Local", title, link, raw_text)
+                article["search_query"] = q
+                article["query_precision"] = spec["precision"]
+                article["local_search_terms"] = " | ".join(local_terms)
+                results.append(article)
+
+            if len(results) >= 3:
+                log_source("DuckDuckGo Local", len(results))
+                return results
+        if results:
+            break
+        time.sleep(1)
+
+    log_source("DuckDuckGo Local", len(results))
+    return results
 
 
 def _gdelt_datetime_window(start_date, days_before=10, days_after=60):
@@ -2158,7 +2386,8 @@ def _contains_any(text, values):
 def score_relevance(title, text, country, start_date, disaster_type,
                     pub_date_str=None, window_days=21,
                     require_country_in_title=False,
-                    location_context=None):
+                    location_context=None,
+                    extra_hazard_terms=None):
     """
     Score article relevance without hard-requiring year, country, or event name.
 
@@ -2199,6 +2428,10 @@ def score_relevance(title, text, country, start_date, disaster_type,
         reasons.append("required_country_title_bonus")
 
     synonyms = get_synonyms(disaster_type)
+    for term in extra_hazard_terms or []:
+        cleaned = normalize_whitespace(term)
+        if cleaned and cleaned.lower() not in {item.lower() for item in synonyms}:
+            synonyms.append(cleaned)
     if _contains_any(title, synonyms):
         score += 3
         reasons.append("hazard_in_title")
@@ -2294,7 +2527,8 @@ def is_relevant(title, text, country, start_date, disaster_type,
                 pub_date_str=None, window_days=21,
                 require_country_in_title=False,
                 location_context=None,
-                minimum_score=4):
+                minimum_score=4,
+                extra_hazard_terms=None):
     scoring = score_relevance(
         title=title,
         text=text,
@@ -2305,6 +2539,7 @@ def is_relevant(title, text, country, start_date, disaster_type,
         window_days=window_days,
         require_country_in_title=require_country_in_title,
         location_context=location_context,
+        extra_hazard_terms=extra_hazard_terms,
     )
     return scoring["score"] >= minimum_score
 

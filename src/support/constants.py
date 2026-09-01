@@ -240,7 +240,7 @@ WORLD_COVER_LCM10_MAX_YEAR = 2026
 #########################################################
 
 # Version 
-NEWS_ENGINE_VERSION = "8.18-gdelt-doc"
+NEWS_ENGINE_VERSION = "8.19-local-news-terms"
 
 # Headers
 HEADERS = {
@@ -384,7 +384,9 @@ SOURCE_RELEVANCE_THRESHOLDS = {
     "Wikipedia": 7,
     "GDELT DOC 2.0": 6,
     "Google News": 6,
+    "Google News Local": 6,
     "DuckDuckGo": 7,
+    "DuckDuckGo Local": 7,
 }
 
 
@@ -401,7 +403,9 @@ DIRECT_SOURCE_PRIORITY = {
     "Wikipedia": 70,
     "GDELT DOC 2.0": 65,
     "Google News": 30,
+    "Google News Local": 30,
     "DuckDuckGo": 20,
+    "DuckDuckGo Local": 20,
 }
 
 

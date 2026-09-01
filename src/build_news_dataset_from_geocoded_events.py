@@ -1,6 +1,9 @@
 from __future__ import annotations
 
 import argparse
+import json
+import re
+import unicodedata
 from datetime import timedelta
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Mapping, Optional, Tuple
@@ -25,6 +28,11 @@ DEFAULT_PROGRESS_CSV = (
     Path(RESULTS_DIR)
     / "news_reasoning"
     / "final_environmental_causal_dataset_2014_plus_news_progress.csv"
+)
+DEFAULT_LOCAL_TERMS_JSON = (
+    Path(RESULTS_DIR)
+    / "news_reasoning"
+    / "local_news_search_terms_llm70b.json"
 )
 
 EVENT_ID_COLUMNS = ("DisNo.", "disaster_id", "emdat_disaster_id")
@@ -187,6 +195,48 @@ def missing_required_fields(record: Mapping[str, Any]) -> List[str]:
     return [field for field in required if not clean_text(record.get(field))]
 
 
+# Converts a text label into the same lookup key used by local term files.
+def lookup_key(value: Any) -> str:
+    text = unicodedata.normalize("NFKD", str(value or ""))
+    text = text.encode("ascii", "ignore").decode("ascii").lower()
+    text = re.sub(r"[^a-z0-9]+", " ", text)
+    return re.sub(r"\s+", " ", text).strip()
+
+
+# Removes parenthetical EM-DAT qualifiers from disaster types.
+def disaster_type_key(disaster_type: Any) -> str:
+    return lookup_key(str(disaster_type or "").split("(")[0])
+
+
+# Reads the optional local-language search-term dictionary.
+def read_local_terms(path: Optional[Path]) -> Dict[str, Any]:
+    if path is None:
+        return {}
+    if not path.exists():
+        raise SystemExit(f"Local terms JSON not found: {path}")
+    with path.open("r", encoding="utf-8") as handle:
+        payload = json.load(handle)
+    if not isinstance(payload, dict):
+        raise SystemExit("Local terms JSON must contain an object")
+    return payload
+
+
+# Checks whether the local dictionary covers one event.
+def has_local_terms(record: Mapping[str, Any], local_terms: Mapping[str, Any]) -> bool:
+    country_key = lookup_key(record.get("country"))
+    disaster_key = disaster_type_key(record.get("disaster_type"))
+    for item in local_terms.get("local_terms") or []:
+        if not isinstance(item, Mapping):
+            continue
+        item_country = lookup_key(item.get("country"))
+        item_disaster = lookup_key(item.get("disaster_type_key")) or disaster_type_key(
+            item.get("disaster_type")
+        )
+        if item_country == country_key and item_disaster == disaster_key:
+            return bool(item.get("terms"))
+    return False
+
+
 # Defines the command-line options for the 2014+ news retrieval batch.
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
@@ -198,8 +248,14 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--offset", type=int, default=0)
     parser.add_argument("--limit", type=int, default=0)
     parser.add_argument("--sleep-seconds", type=float, default=3.0)
-    parser.add_argument("--source-mode", choices=["all", "gdelt-only"], default="all")
+    parser.add_argument(
+        "--source-mode",
+        choices=["all", "gdelt-only", "local-news-only"],
+        default="all",
+    )
+    parser.add_argument("--local-terms-json", default=str(DEFAULT_LOCAL_TERMS_JSON))
     parser.add_argument("--only-without-news", action="store_true")
+    parser.add_argument("--only-with-local-terms", action="store_true")
     parser.add_argument("--force-news", action="store_true")
     parser.add_argument("--dry-run", action="store_true")
     return parser.parse_args()
@@ -219,6 +275,9 @@ def main() -> None:
     input_csv = Path(args.input_csv)
     output_json = Path(args.output_json)
     progress_csv = Path(args.progress_csv)
+    local_terms = {}
+    if args.source_mode == "local-news-only":
+        local_terms = read_local_terms(Path(args.local_terms_json))
 
     frame = read_events(input_csv)
     id_column = event_id_column(frame)
@@ -231,12 +290,16 @@ def main() -> None:
     print(f"Dry run: {args.dry_run}")
     print(f"Source mode: {args.source_mode}")
     print(f"Only without news: {args.only_without_news}")
+    print(f"Only with local terms: {args.only_with_local_terms}")
+    if args.source_mode == "local-news-only":
+        print(f"Local terms JSON: {args.local_terms_json}")
     print(f"Output JSON: {output_json}")
     print(f"Progress CSV: {progress_csv}")
 
     processed = 0
     skipped_existing = 0
     skipped_missing = 0
+    skipped_no_local_terms = 0
     with_news = 0
 
     for position, (_, row) in enumerate(selected.iterrows(), start=1):
@@ -264,6 +327,14 @@ def main() -> None:
             and article_count_from_record(existing) > 0
         ):
             skipped_existing += 1
+            continue
+
+        if (
+            args.only_with_local_terms
+            and args.source_mode == "local-news-only"
+            and not has_local_terms(record, local_terms)
+        ):
+            skipped_no_local_terms += 1
             continue
 
         if (
@@ -299,6 +370,7 @@ def main() -> None:
                 location_context=record.get("location_context") or {},
                 reliefweb_appname=RELIEFWEB_APPNAME,
                 source_mode=args.source_mode,
+                local_news_terms=local_terms,
             )
             record["news_data"] = news_payload
             record["news_data_searched"] = True
@@ -330,6 +402,7 @@ def main() -> None:
     print(f"Processed this run: {processed}")
     print(f"Skipped existing current-version news: {skipped_existing}")
     print(f"Skipped missing required fields: {skipped_missing}")
+    print(f"Skipped missing local terms: {skipped_no_local_terms}")
     print(f"Events with news this run: {with_news}")
     print(f"Total records in output JSON: {len(records)}")
 
