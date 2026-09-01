@@ -15,7 +15,7 @@ from support.event_news_summary import clean_text, response_json_text
 from support.reasoner import DEFAULT_REASONER_MODEL, Reasoner
 
 
-LOCAL_TERMS_PROMPT_VERSION = "local_news_search_terms_v3"
+LOCAL_TERMS_PROMPT_VERSION = "local_news_search_terms_v4"
 DEFAULT_INPUT_JSON = (
     Path(RESULTS_DIR)
     / "news_reasoning"
@@ -59,6 +59,8 @@ Rules:
 14. If the best local news language is French, Spanish, Portuguese, English, or Arabic for that country, it is acceptable to use that language.
 15. Keep each term short enough to work in Google News or DuckDuckGo queries.
 16. Preserve accents and local spelling when they are normally used.
+17. It is better to omit a difficult country/disaster_type pair than to invent malformed local-language words.
+18. Do not use generic weather or water words by themselves, e.g. "rain", "water", "river", "maji", "pula", or "imvura".
 
 Good examples:
 - China / Road: ["交通事故", "车祸", "道路交通事故", "撞车"]
@@ -111,6 +113,20 @@ GENERIC_SINGLE_TERMS = {
     "road",
     "water accident",
     "water disaster",
+    "bencana",
+    "bencana alam",
+    "rain",
+    "chuva",
+    "pula",
+    "metsi",
+    "metsi ya pula",
+    "metsi ya maji",
+    "amazi",
+    "imvura",
+    "maji",
+    "majimaji",
+    "maji makubwa",
+    "kifo cha gari",
 }
 
 BAD_TERM_KEYS = {
@@ -207,6 +223,11 @@ LATIN_NEWS_LANGUAGES = {
     "wolof",
 }
 
+UNRELIABLE_NON_LATIN_LANGUAGES = {
+    "armenian",
+    "khmer",
+}
+
 SCRIPT_ARTIFACT_CHARS = set("玠么")
 SCRIPT_ARTIFACT_FRAGMENTS = {
     "الطرريرا",
@@ -272,6 +293,12 @@ def allows_latin_terms(languages: Iterable[str]) -> bool:
     return not keys or bool(keys & LATIN_NEWS_LANGUAGES)
 
 
+# Detects languages where the model produced malformed native-script terms in tests.
+def has_unreliable_native_script(languages: Iterable[str]) -> bool:
+    keys = {lookup_key(language) for language in languages if clean_text(language)}
+    return bool(keys & UNRELIABLE_NON_LATIN_LANGUAGES)
+
+
 # Detects malformed terms with the same token repeated several times.
 def has_repeated_token_pattern(term: str) -> bool:
     tokens = term_quality_key(term).split()
@@ -317,11 +344,14 @@ def clean_local_terms(
     cleaned_terms = []
     seen = set()
     latin_allowed = allows_latin_terms(languages)
+    unreliable_native_script = has_unreliable_native_script(languages)
 
     for term in terms:
         cleaned = clean_text(term)
         key = term_quality_key(cleaned)
         if not cleaned or key in seen:
+            continue
+        if has_non_latin_letters(cleaned) and unreliable_native_script:
             continue
         if any(char in cleaned for char in SCRIPT_ARTIFACT_CHARS):
             continue
