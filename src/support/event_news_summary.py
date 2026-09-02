@@ -6,7 +6,7 @@ from email.utils import parsedate_to_datetime
 from typing import Any, Dict, Iterable, List, Mapping, Optional, Tuple
 
 
-SUMMARY_PROMPT_VERSION = "event_news_summary_v4"
+SUMMARY_PROMPT_VERSION = "event_news_summary_v5"
 CAUSAL_CHAIN_PROMPT_VERSION = "event_causal_chain_v1"
 INSUFFICIENT_INFORMATION = "INSUFFICIENT_INFORMATION"
 
@@ -153,6 +153,8 @@ SUMMARY_LOCATION_FIELDS = [
     "emdat_location",
     "Location",
     "location",
+    "llm_canonical_location",
+    "llm_geocoding_string",
     "geolocation",
     "adm1",
     "ADM1",
@@ -180,6 +182,40 @@ SUMMARY_DISASTER_TERMS = {
     "water": ["boat", "ship", "ferry", "capsized", "shipwreck", "maritime"],
     "wildfire": ["wildfire", "bushfire", "forest fire", "blaze"],
 }
+SUMMARY_COUNTRY_ALIASES = {
+    "bolivia (plurinational state of)": ["Bolivia"],
+    "democratic people's republic of korea": ["North Korea", "DPRK"],
+    "democratic republic of the congo": ["DR Congo", "DRC", "Congo-Kinshasa"],
+    "iran (islamic republic of)": ["Iran"],
+    "lao people's democratic republic": ["Laos"],
+    "republic of korea": ["South Korea", "Korea"],
+    "russian federation": ["Russia"],
+    "syrian arab republic": ["Syria"],
+    "taiwan (province of china)": ["Taiwan"],
+    "türkiye": ["Turkey"],
+    "united republic of tanzania": ["Tanzania"],
+    "united states of america": ["United States", "USA", "U.S."],
+    "venezuela (bolivarian republic of)": ["Venezuela"],
+    "viet nam": ["Vietnam"],
+}
+SUMMARY_GENERIC_LOCATION_KEYS = {
+    "central",
+    "eastern",
+    "island",
+    "islands",
+    "national",
+    "nationwide",
+    "northern",
+    "province",
+    "provinces",
+    "region",
+    "regions",
+    "several",
+    "southern",
+    "state",
+    "states",
+    "western",
+}
 
 # Cleans text values before they are inserted into prompts or outputs.
 def clean_text(value: Any) -> str:
@@ -203,6 +239,24 @@ def lookup_key(value: Any) -> str:
     text = str(value or "").lower()
     text = re.sub(r"[^a-z0-9]+", " ", text)
     return re.sub(r"\s+", " ", text).strip()
+
+
+# Removes descriptive prefixes from EM-DAT location fragments.
+def clean_location_piece(value: Any) -> str:
+    text = clean_text(value)
+    text = re.sub(
+        r"^(near|around|between|in|at|outskirts of|villages near|slums of)\s+",
+        "",
+        text,
+        flags=re.IGNORECASE,
+    )
+    text = re.sub(
+        r"\b(city|cities|districts?|provinces?|regions?|states?|municipalities|villages?)$",
+        "",
+        text,
+        flags=re.IGNORECASE,
+    )
+    return clean_text(text)
 
 
 # Reads list-like audit fields saved by the news pipeline.
@@ -291,10 +345,46 @@ def metadata_location_terms(metadata: Mapping[str, Any]) -> List[str]:
             continue
         pieces = re.split(r"[,;/()]+|\band\b|\bet\b|\be\b", value, flags=re.IGNORECASE)
         for piece in pieces:
-            cleaned = clean_text(piece)
+            cleaned = clean_location_piece(piece)
             if len(cleaned) >= 3:
                 terms.append(cleaned)
     return list(dict.fromkeys(terms))
+
+
+# Returns country names and aliases used for country-level matching.
+def metadata_country_terms(metadata: Mapping[str, Any]) -> List[str]:
+    country = clean_text(metadata.get("country") or metadata.get("Country"))
+    if not country:
+        return []
+    terms = [country]
+    terms.extend(SUMMARY_COUNTRY_ALIASES.get(country.lower(), []))
+    if "(" in country:
+        terms.append(country.split("(")[0].strip())
+    return list(dict.fromkeys(term for term in terms if clean_text(term)))
+
+
+# Keeps only location terms that are more specific than the country.
+def specific_metadata_location_terms(metadata: Mapping[str, Any]) -> List[str]:
+    country_keys = {lookup_key(term) for term in metadata_country_terms(metadata)}
+    specific_terms: List[str] = []
+    for term in metadata_location_terms(metadata):
+        term_key = lookup_key(term)
+        if not term_key or term_key in country_keys:
+            continue
+        if term_key in SUMMARY_GENERIC_LOCATION_KEYS:
+            continue
+        specific_terms.append(term)
+    return list(dict.fromkeys(specific_terms))
+
+
+# Checks a plain-text match against normalized whole words.
+def text_mentions_term(text: str, term: str) -> bool:
+    text_key = lookup_key(text)
+    term_key = lookup_key(term)
+    if len(term_key) < 3:
+        return False
+    pattern = rf"(^|\s){re.escape(term_key)}(\s|$)"
+    return re.search(pattern, text_key) is not None
 
 
 # Checks a plain-text fallback match when article audit fields are missing.
@@ -303,8 +393,7 @@ def text_mentions_any(text: str, terms: Iterable[str]) -> bool:
     if not text_key:
         return False
     for term in terms:
-        term_key = lookup_key(term)
-        if len(term_key) >= 3 and term_key in text_key:
+        if text_mentions_term(text_key, term):
             return True
     return False
 
@@ -339,30 +428,32 @@ def article_is_directly_relevant_for_summary(
         return False
 
     has_hazard = bool(reasons & SUMMARY_HAZARD_REASONS)
-    has_direct_place = bool(reasons & SUMMARY_DIRECT_MATCH_REASONS)
     has_date = bool(reasons & SUMMARY_DATE_REASONS)
-    location_terms = metadata_location_terms(metadata)
-
-    if has_hazard and has_direct_place and confidence != "low":
-        return True
-
-    if has_hazard and has_date and not location_terms and confidence in {"high", "medium"}:
-        return True
-
     title_and_text = " ".join(
         clean_text(article.get(key))
         for key in ("title", "raw_text", "text", "description", "snippet")
         if clean_text(article.get(key))
     )
     fallback_has_hazard = text_mentions_any(title_and_text, disaster_terms(metadata.get("disaster_type") or metadata.get("Disaster Type")))
-    fallback_has_place = text_mentions_any(title_and_text, location_terms)
+    hazard_matches = has_hazard or fallback_has_hazard
     fallback_has_year = bool(event_year and event_year in title_and_text)
+    date_matches = has_date or fallback_has_year or bool(published_year and published_year == event_year)
+
+    if not hazard_matches or not date_matches or confidence == "low":
+        return False
+
+    location_terms = specific_metadata_location_terms(metadata)
+    country_terms = metadata_country_terms(metadata)
+    has_specific_place = text_mentions_any(title_and_text, location_terms)
+    has_country = text_mentions_any(title_and_text, country_terms)
+
+    if location_terms:
+        return has_specific_place
 
     trusted_source = source.startswith(("ReliefWeb", "GDACS", "IFRC GO", "FloodList"))
-    if trusted_source and has_hazard and has_date and confidence == "high" and not location_terms:
-        return True
-
-    return fallback_has_hazard and fallback_has_place and fallback_has_year
+    if trusted_source and confidence in {"high", "medium"}:
+        return has_country
+    return has_country and confidence == "high"
 
 
 # Finds the event id using the field names used across the project.

@@ -324,6 +324,8 @@ def main() -> None:
 
         print(
             f"[{position}/{total}] {event_id}: "
+            f"relevant={coverage_row['summary_relevant_news_count']}/"
+            f"{coverage_row['news_count']} "
             f"news={coverage_row['usable_news_count']} "
             f"quality={coverage_row['news_input_quality']}",
             flush=True,
