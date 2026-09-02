@@ -49,6 +49,7 @@ COVERAGE_COLUMNS = [
     "news_input_quality",
     "llm_call_status",
     "summary_prompt_version",
+    "summary_validation_status",
 ]
 OUTPUT_METADATA_FIELDS = [
     ("country", ("country", "Country")),
@@ -338,6 +339,7 @@ def main() -> None:
             "model_name": args.model_name,
             "llm_call_status": "dry_run" if args.dry_run else "called",
             "summary_prompt_version": SUMMARY_PROMPT_VERSION,
+            "summary_validation_status": "dry_run" if args.dry_run else "pending",
         }
 
         if args.include_prompts or args.dry_run:
@@ -354,6 +356,7 @@ def main() -> None:
                     "llm_call_status": "skipped_insufficient_news",
                     "event_summary": INSUFFICIENT_INFORMATION,
                     "summary_raw_response": "",
+                    "summary_validation_status": "not_called_insufficient_news",
                 }
             )
         else:

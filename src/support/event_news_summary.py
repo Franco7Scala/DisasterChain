@@ -6,7 +6,7 @@ from email.utils import parsedate_to_datetime
 from typing import Any, Dict, Iterable, List, Mapping, Optional, Tuple
 
 
-SUMMARY_PROMPT_VERSION = "event_news_summary_v5"
+SUMMARY_PROMPT_VERSION = "event_news_summary_v6"
 CAUSAL_CHAIN_PROMPT_VERSION = "event_causal_chain_v1"
 INSUFFICIENT_INFORMATION = "INSUFFICIENT_INFORMATION"
 
@@ -216,6 +216,18 @@ SUMMARY_GENERIC_LOCATION_KEYS = {
     "states",
     "western",
 }
+SUMMARY_UNSUPPORTED_RESPONSE_PATTERNS = [
+    r"\balthough\b.*\bnews articles?\b.*\bprimarily focus\b",
+    r"\bavailable news articles?\b.*\bprimarily focus\b",
+    r"\bprovided news articles?\b.*\bprimarily focus\b",
+    r"\bnews articles?\b.*\bdo not directly (report|describe|support|provide)\b",
+    r"\bprovided news articles?\b.*\bnot directly (report|describe|support|provide)\b",
+    r"\bdoes not provide direct information\b",
+    r"\bdo not provide specific details\b",
+    r"\bnot directly supported by the provided news articles?\b",
+    r"\bbased on the available information, it can be inferred\b",
+    r"\bmetadata (confirms|indicates)\b.*\bnews articles?\b.*\bprimarily focus\b",
+]
 
 # Cleans text values before they are inserted into prompts or outputs.
 def clean_text(value: Any) -> str:
@@ -689,6 +701,17 @@ def normalize_summary_response(response: Any) -> str:
     text = re.sub(r"^(summary\s*:)\s*", "", text, flags=re.IGNORECASE).strip()
     return text or INSUFFICIENT_INFORMATION
 
+
+# Detects summaries where the model admits the evidence is not event-specific.
+def summary_looks_unsupported(summary: Any) -> bool:
+    text = clean_text(summary)
+    if not text or text == INSUFFICIENT_INFORMATION:
+        return False
+    return any(
+        re.search(pattern, text, flags=re.IGNORECASE)
+        for pattern in SUMMARY_UNSUPPORTED_RESPONSE_PATTERNS
+    )
+
 # Extracts the first JSON object from an LLM response.
 def response_json_text(response: Any) -> str:
     text = clean_text(response)
@@ -759,10 +782,16 @@ def summarize_event_from_news(
 ) -> Dict[str, Any]:
     prompt = build_summary_prompt(context)
     raw_response = reasoner.ask(prompt, max_new_tokens=max_new_tokens)
+    event_summary = normalize_summary_response(raw_response)
+    validation_status = "accepted"
+    if summary_looks_unsupported(event_summary):
+        event_summary = INSUFFICIENT_INFORMATION
+        validation_status = "rejected_unrelated_news_admission"
     return {
-        "event_summary": normalize_summary_response(raw_response),
+        "event_summary": event_summary,
         "summary_raw_response": raw_response,
         "summary_prompt_version": SUMMARY_PROMPT_VERSION,
+        "summary_validation_status": validation_status,
     }
 
 # Builds the prompt, calls the Reasoner, and returns causal-chain fields.
