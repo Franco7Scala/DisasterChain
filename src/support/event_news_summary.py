@@ -2,10 +2,11 @@ from __future__ import annotations
 
 import json
 import re
+from email.utils import parsedate_to_datetime
 from typing import Any, Dict, Iterable, List, Mapping, Optional, Tuple
 
 
-SUMMARY_PROMPT_VERSION = "event_news_summary_v3"
+SUMMARY_PROMPT_VERSION = "event_news_summary_v4"
 CAUSAL_CHAIN_PROMPT_VERSION = "event_causal_chain_v1"
 INSUFFICIENT_INFORMATION = "INSUFFICIENT_INFORMATION"
 
@@ -121,6 +122,65 @@ ARTICLE_TEXT_FIELDS = [
     "title",
 ]
 
+SUMMARY_DIRECT_MATCH_REASONS = {
+    "local_place_in_title",
+    "local_place_in_text",
+    "event_name_in_title",
+    "event_name_in_text",
+}
+SUMMARY_HAZARD_REASONS = {
+    "hazard_in_title",
+    "hazard_in_text",
+    "local_hazard_in_title",
+    "local_hazard_in_text",
+}
+SUMMARY_DATE_REASONS = {
+    "event_year_present",
+    "event_month_present",
+    "publication_date_near_event",
+    "publication_date_same_year",
+}
+SUMMARY_RISKY_PENALTIES = {
+    "different_year_in_title",
+    "publication_date_far_from_event",
+    "missing_local_or_event_context",
+    "generic_title",
+    "unrelated_multi_year_range",
+}
+SUMMARY_LOCATION_FIELDS = [
+    "event_name",
+    "Event Name",
+    "emdat_location",
+    "Location",
+    "location",
+    "geolocation",
+    "adm1",
+    "ADM1",
+    "adm2",
+    "ADM2",
+    "adm3",
+    "ADM3",
+]
+SUMMARY_DISASTER_TERMS = {
+    "air": ["air", "plane", "aircraft", "aviation", "crash"],
+    "collapse": ["collapse", "collapsed", "building", "structure"],
+    "drought": ["drought", "dry spell", "water shortage"],
+    "earthquake": ["earthquake", "quake", "seismic", "tremor"],
+    "epidemic": ["epidemic", "outbreak", "disease"],
+    "explosion": ["explosion", "blast", "gas leak", "chemical leak"],
+    "extreme temperature": ["heatwave", "heat wave", "cold wave", "extreme heat"],
+    "fire": ["fire", "blaze", "burned"],
+    "flood": ["flood", "flooding", "inundation", "overflow", "heavy rain"],
+    "gas leak": ["gas leak", "chlorine", "toxic gas", "chemical leak"],
+    "mass movement": ["landslide", "mudslide", "rockslide", "debris flow"],
+    "miscellaneous accident": ["accident", "stampede", "incident"],
+    "rail": ["rail", "train", "derailment"],
+    "road": ["road", "crash", "collision", "traffic accident", "bus"],
+    "storm": ["storm", "cyclone", "hurricane", "typhoon", "tropical storm"],
+    "water": ["boat", "ship", "ferry", "capsized", "shipwreck", "maritime"],
+    "wildfire": ["wildfire", "bushfire", "forest fire", "blaze"],
+}
+
 # Cleans text values before they are inserted into prompts or outputs.
 def clean_text(value: Any) -> str:
     if value is None:
@@ -136,6 +196,174 @@ def truncate_text(text: str, max_chars: int) -> str:
     if max_chars <= 0 or len(text) <= max_chars:
         return text
     return text[: max_chars - 3].rstrip() + "..."
+
+
+# Converts text to a simple lowercase key for loose matching.
+def lookup_key(value: Any) -> str:
+    text = str(value or "").lower()
+    text = re.sub(r"[^a-z0-9]+", " ", text)
+    return re.sub(r"\s+", " ", text).strip()
+
+
+# Reads list-like audit fields saved by the news pipeline.
+def list_field(value: Any) -> List[str]:
+    if isinstance(value, list):
+        return [clean_text(item) for item in value if clean_text(item)]
+    text = clean_text(value)
+    if not text:
+        return []
+    if text.startswith("[") and text.endswith("]"):
+        try:
+            parsed = json.loads(text.replace("'", '"'))
+        except json.JSONDecodeError:
+            parsed = []
+        if isinstance(parsed, list):
+            return [clean_text(item) for item in parsed if clean_text(item)]
+    return [clean_text(item) for item in re.split(r"[|,;]+", text) if clean_text(item)]
+
+
+# Extracts a numeric field saved by the news pipeline.
+def numeric_field(value: Any) -> float:
+    try:
+        return float(value or 0)
+    except (TypeError, ValueError):
+        return 0.0
+
+
+# Returns the year in the event metadata when available.
+def event_year_from_metadata(metadata: Mapping[str, Any]) -> str:
+    direct = clean_text(
+        metadata.get("start_date")
+        or metadata.get("Start Date")
+        or metadata.get("_llm_start_date")
+    )
+    match = re.search(r"\b(19\d{2}|20\d{2})\b", direct)
+    if match:
+        return match.group(1)
+    return clean_text(metadata.get("Start Year") or metadata.get("start_year"))
+
+
+# Reads the publication year from common article date fields.
+def article_publication_year(article: Mapping[str, Any]) -> str:
+    for key in ("published_date", "date", "seendate", "published_at"):
+        value = clean_text(article.get(key))
+        if not value:
+            continue
+        try:
+            return str(parsedate_to_datetime(value).year)
+        except (TypeError, ValueError, IndexError, AttributeError):
+            match = re.search(r"\b(19\d{2}|20\d{2})\b", value)
+            if match:
+                return match.group(1)
+    return ""
+
+
+# Detects title or URL years that clearly point to another event.
+def has_wrong_title_or_url_year(article: Mapping[str, Any], event_year: str) -> bool:
+    if not event_year:
+        return False
+    title = clean_text(article.get("title"))
+    url = clean_text(article.get("url"))
+    years = set(re.findall(r"\b(19\d{2}|20\d{2})\b", title))
+    years.update(
+        re.findall(
+            r"(?:^|[/_-])((?:19|20)\d{2})(?:[/_-]|$)",
+            url,
+            flags=re.IGNORECASE,
+        )
+    )
+    years.update(
+        re.findall(
+            r"(?:jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*[-_]\d{1,2}[-_]((?:19|20)\d{2})",
+            url,
+            flags=re.IGNORECASE,
+        )
+    )
+    return bool(years and event_year not in years)
+
+
+# Extracts coarse location terms from event metadata.
+def metadata_location_terms(metadata: Mapping[str, Any]) -> List[str]:
+    terms: List[str] = []
+    for key in SUMMARY_LOCATION_FIELDS:
+        value = clean_text(metadata.get(key))
+        if not value:
+            continue
+        pieces = re.split(r"[,;/()]+|\band\b|\bet\b|\be\b", value, flags=re.IGNORECASE)
+        for piece in pieces:
+            cleaned = clean_text(piece)
+            if len(cleaned) >= 3:
+                terms.append(cleaned)
+    return list(dict.fromkeys(terms))
+
+
+# Checks a plain-text fallback match when article audit fields are missing.
+def text_mentions_any(text: str, terms: Iterable[str]) -> bool:
+    text_key = lookup_key(text)
+    if not text_key:
+        return False
+    for term in terms:
+        term_key = lookup_key(term)
+        if len(term_key) >= 3 and term_key in text_key:
+            return True
+    return False
+
+
+# Returns disaster keywords for a coarse fallback relevance check.
+def disaster_terms(disaster_type: Any) -> List[str]:
+    key = lookup_key(str(disaster_type or "").split("(")[0])
+    for disaster_key, terms in SUMMARY_DISASTER_TERMS.items():
+        if disaster_key in key:
+            return terms
+    return [key] if key else []
+
+
+# Checks whether one article is direct enough to be sent to the summary LLM.
+def article_is_directly_relevant_for_summary(
+    article: Mapping[str, Any],
+    metadata: Mapping[str, Any],
+) -> bool:
+    reasons = set(list_field(article.get("relevance_reasons")))
+    penalties = set(list_field(article.get("relevance_penalties")))
+    confidence = clean_text(article.get("confidence")).lower()
+    source = clean_text(article.get("source"))
+    event_year = event_year_from_metadata(metadata)
+
+    if penalties & SUMMARY_RISKY_PENALTIES:
+        return False
+    if has_wrong_title_or_url_year(article, event_year):
+        return False
+
+    published_year = article_publication_year(article)
+    if event_year and published_year and abs(int(published_year) - int(event_year)) > 1:
+        return False
+
+    has_hazard = bool(reasons & SUMMARY_HAZARD_REASONS)
+    has_direct_place = bool(reasons & SUMMARY_DIRECT_MATCH_REASONS)
+    has_date = bool(reasons & SUMMARY_DATE_REASONS)
+    location_terms = metadata_location_terms(metadata)
+
+    if has_hazard and has_direct_place and confidence != "low":
+        return True
+
+    if has_hazard and has_date and not location_terms and confidence in {"high", "medium"}:
+        return True
+
+    title_and_text = " ".join(
+        clean_text(article.get(key))
+        for key in ("title", "raw_text", "text", "description", "snippet")
+        if clean_text(article.get(key))
+    )
+    fallback_has_hazard = text_mentions_any(title_and_text, disaster_terms(metadata.get("disaster_type") or metadata.get("Disaster Type")))
+    fallback_has_place = text_mentions_any(title_and_text, location_terms)
+    fallback_has_year = bool(event_year and event_year in title_and_text)
+
+    trusted_source = source.startswith(("ReliefWeb", "GDACS", "IFRC GO", "FloodList"))
+    if trusted_source and has_hazard and has_date and confidence == "high" and not location_terms:
+        return True
+
+    return fallback_has_hazard and fallback_has_place and fallback_has_year
+
 
 # Finds the event id using the field names used across the project.
 def event_id_from_record(record: Mapping[str, Any]) -> str:
@@ -249,12 +477,21 @@ def news_input_quality(usable_articles: int, total_chars: int) -> str:
 def format_articles(
     articles: Iterable[Mapping[str, Any]],
     *,
+    metadata: Optional[Mapping[str, Any]] = None,
     max_articles: int = 8,
     max_article_chars: int = 1800,
     max_total_chars: int = 14000,
 ) -> Tuple[str, Dict[str, Any]]:
     article_list = [article for article in articles if isinstance(article, Mapping)]
-    selected = sorted_articles(article_list)[:max_articles]
+    if metadata is not None:
+        relevant_articles = [
+            article
+            for article in article_list
+            if article_is_directly_relevant_for_summary(article, metadata)
+        ]
+    else:
+        relevant_articles = article_list
+    selected = sorted_articles(relevant_articles)[:max_articles]
     formatted: List[str] = []
     total_chars = 0
     sources = set()
@@ -294,6 +531,8 @@ def format_articles(
 
     stats = {
         "news_count": len(article_list),
+        "summary_relevant_news_count": len(relevant_articles),
+        "news_rejected_for_summary": len(article_list) - len(relevant_articles),
         "selected_news_count": len(selected),
         "usable_news_count": usable_articles,
         "news_sources_count": len(sources),
@@ -318,8 +557,10 @@ def build_event_news_context(
     if isinstance(news_data, Mapping):
         articles = news_data.get("articles") or []
 
+    metadata = merge_event_metadata(record, event_row)
     news_articles, stats = format_articles(
         articles,
+        metadata=metadata,
         max_articles=max_articles,
         max_article_chars=max_article_chars,
         max_total_chars=max_total_chars,
