@@ -240,7 +240,7 @@ WORLD_COVER_LCM10_MAX_YEAR = 2026
 #########################################################
 
 # Version 
-NEWS_ENGINE_VERSION = "8.19-local-news-terms"
+NEWS_ENGINE_VERSION = "8.20-local-news-unicode"
 
 # Headers
 HEADERS = {

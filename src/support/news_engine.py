@@ -2379,6 +2379,37 @@ def _contains_fuzzy(text, values, threshold=0.86):
     return False
 
 
+# Normalizes multilingual text while preserving non-Latin scripts.
+def _normalize_multilingual_text(text):
+    text = unicodedata.normalize("NFKC", str(text or "")).casefold()
+    text = text.replace("\u200c", "").replace("\u200d", "")
+    text = re.sub(r"\s+", " ", text)
+    return text.strip()
+
+
+# Checks local-language terms with exact Unicode-aware matching.
+def _contains_multilingual_term(text, values):
+    text_norm = _normalize_multilingual_text(text)
+    if not text_norm:
+        return False
+    compact_text = re.sub(r"\s+", "", text_norm)
+
+    for value in values:
+        if _is_blank_context_value(value):
+            continue
+        term_norm = _normalize_multilingual_text(value)
+        if len(term_norm) < 2:
+            continue
+        if term_norm in text_norm:
+            return True
+
+        compact_term = re.sub(r"\s+", "", term_norm)
+        if len(compact_term) >= 2 and compact_term in compact_text:
+            return True
+
+    return False
+
+
 def _contains_any(text, values):
     return _contains_fuzzy(text, values)
 
@@ -2428,16 +2459,34 @@ def score_relevance(title, text, country, start_date, disaster_type,
         reasons.append("required_country_title_bonus")
 
     synonyms = get_synonyms(disaster_type)
+    local_hazard_terms = [
+        normalize_whitespace(term)
+        for term in extra_hazard_terms or []
+        if normalize_whitespace(term)
+    ]
     for term in extra_hazard_terms or []:
         cleaned = normalize_whitespace(term)
         if cleaned and cleaned.lower() not in {item.lower() for item in synonyms}:
             synonyms.append(cleaned)
-    if _contains_any(title, synonyms):
+    title_has_standard_hazard = _contains_any(title, synonyms)
+    title_has_local_hazard = _contains_multilingual_term(title, local_hazard_terms)
+    text_has_standard_hazard = _contains_any(combined, synonyms)
+    text_has_local_hazard = _contains_multilingual_term(combined, local_hazard_terms)
+
+    if title_has_standard_hazard or title_has_local_hazard:
         score += 3
-        reasons.append("hazard_in_title")
-    elif _contains_any(combined, synonyms):
+        reasons.append(
+            "local_hazard_in_title"
+            if title_has_local_hazard and not title_has_standard_hazard
+            else "hazard_in_title"
+        )
+    elif text_has_standard_hazard or text_has_local_hazard:
         score += 2
-        reasons.append("hazard_in_text")
+        reasons.append(
+            "local_hazard_in_text"
+            if text_has_local_hazard and not text_has_standard_hazard
+            else "hazard_in_text"
+        )
     else:
         score -= 3
         penalties.append("missing_hazard_term")
