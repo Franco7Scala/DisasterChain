@@ -5,7 +5,7 @@ import re
 from typing import Any, Dict, Iterable, List, Mapping, Optional, Tuple
 
 
-SUMMARY_PROMPT_VERSION = "event_news_summary_v2"
+SUMMARY_PROMPT_VERSION = "event_news_summary_v3"
 CAUSAL_CHAIN_PROMPT_VERSION = "event_causal_chain_v1"
 INSUFFICIENT_INFORMATION = "INSUFFICIENT_INFORMATION"
 
@@ -16,11 +16,14 @@ Write a comprehensive, narrative summary of the disaster event. You must weave t
 
 Rules:
 1. Grounding: Do not invent facts, numbers, dates, locations, causes, or impacts. Base your text ONLY on the provided inputs.
-2. Source Integration (CRITICAL): Use the Event Metadata to anchor the basic facts (date, location, disaster type). You MUST use the News Articles to flesh out the narrative (e.g., the physical evolution of the event, human impact, infrastructure damage, and rescue efforts).
-3. Narrative Style: Write a discursive, encyclopedic paragraph (around 100-150 words). Do not just list metadata facts mechanically. Tell the story of what happened on the ground as reported by the news.
-4. Specificity: Include specific details mentioned in the news, such as weather measurements (e.g., "120mm of rain"), exact areas affected, or casualty estimates, if available.
-5. Incomplete Data: If the news articles are limited, summarize what is supported and avoid overclaiming. If there is absolutely not enough information in both sources to write a summary, output exactly: INSUFFICIENT_INFORMATION.
-6. Output Format: Return ONLY the summary text. Do not include bullet points, headings, introductory phrases, or JSON.
+2. Event Matching (CRITICAL): Before writing, check whether the news articles directly describe the same event as the metadata. The article must match the event by country/location and disaster type, and it must be temporally compatible with the event date.
+3. Ignore unrelated articles: Do not use articles about a different year, a different location, a different disaster type, a generic regional overview, preparedness, forecasts, political response, or a similar but separate event.
+4. Metadata is not enough: Use Event Metadata only to identify and anchor the target event. If the News Articles do not directly support the event narrative, output exactly: INSUFFICIENT_INFORMATION.
+5. Source Integration: When at least one article is directly relevant, use the Event Metadata for the basic facts and use the News Articles to flesh out the narrative, including physical evolution, human impact, infrastructure damage, rescue efforts, and reported measurements when available.
+6. Narrative Style: Write a discursive, encyclopedic paragraph (around 100-150 words). Do not just list metadata facts mechanically. Tell the story of what happened on the ground as reported by the news.
+7. Specificity: Include specific details mentioned in the news, such as weather measurements (e.g., "120mm of rain"), exact areas affected, or casualty estimates, if available.
+8. Incomplete Data: If the relevant news articles are limited, summarize only what is directly supported and avoid overclaiming. If no directly relevant article remains after the matching check, output exactly: INSUFFICIENT_INFORMATION.
+9. Output Format: Return ONLY the summary text. Do not include bullet points, headings, introductory phrases, or JSON.
 
 Event metadata:
 {event_metadata}
