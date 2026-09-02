@@ -10,6 +10,7 @@ import pandas as pd
 from support.constants import RESULTS_DIR
 from support.event_news_summary import (
     INSUFFICIENT_INFORMATION,
+    SUMMARY_PROMPT_VERSION,
     build_event_news_context,
     build_summary_prompt,
     clean_text,
@@ -47,6 +48,7 @@ COVERAGE_COLUMNS = [
     "news_total_chars",
     "news_input_quality",
     "llm_call_status",
+    "summary_prompt_version",
 ]
 OUTPUT_METADATA_FIELDS = [
     ("country", ("country", "Country")),
@@ -335,6 +337,7 @@ def main() -> None:
             **coverage_row,
             "model_name": args.model_name,
             "llm_call_status": "dry_run" if args.dry_run else "called",
+            "summary_prompt_version": SUMMARY_PROMPT_VERSION,
         }
 
         if args.include_prompts or args.dry_run:
