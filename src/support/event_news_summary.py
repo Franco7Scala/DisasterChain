@@ -7,7 +7,7 @@ from typing import Any, Dict, Iterable, List, Mapping, Optional, Tuple
 
 
 SUMMARY_PROMPT_VERSION = "event_news_summary_v6"
-CAUSAL_CHAIN_PROMPT_VERSION = "event_causal_chain_v2"
+CAUSAL_CHAIN_PROMPT_VERSION = "event_causal_chain_v3"
 INSUFFICIENT_INFORMATION = "INSUFFICIENT_INFORMATION"
 
 SUMMARY_PROMPT_TEMPLATE = """You are an expert journalistic summarizer analyzing disaster event records and related news articles.
@@ -40,17 +40,17 @@ Task:
 Extract the causal chain of the disaster event using ONLY the information provided in the event metadata and news articles.
 
 Definition of Causal Chain:
-For this task, a "causal chain" is a direct sequence of interconnected physical and socio-economic events where each step explicitly triggers the next. It typically originates from a meteorological or geological trigger (e.g., Heavy Rain), leads to an intermediate environmental change (e.g., River Overflow, Soil Saturation), and results in a final physical or social impact (e.g., Bridge Collapse, Flooded Homes, Casualties). Exclude purely political or administrative responses (e.g., declaring a state of emergency) unless they are direct causes of further physical impacts.
+For this task, a "causal chain" is a direct sequence of interconnected physical and socio-economic events where each step explicitly triggers or leads to the next. It typically originates from a meteorological, geological, technological, or human trigger (e.g., Heavy Rain, Earthquake, Mechanical Failure), leads to an intermediate process when reported (e.g., River Overflow, Soil Saturation, Container Rupture), and results in a final physical or social impact (e.g., Bridge Collapse, Flooded Homes, Casualties). A chain can be partial: if the initial trigger is unknown but the article explicitly reports the disaster process and impact, extract the supported steps instead of returning an empty list. Exclude purely political or administrative responses (e.g., declaring a state of emergency) unless they are direct causes of further physical impacts.
 
 Rules:
-1. Grounding: Do not invent causal links. Every extracted event must be explicitly supported by the text.
+1. Grounding: Do not invent causal links. Every extracted event must be explicitly supported by the news text.
 2. Order: Extract the sequence of relevant causal events in chronological order. If chronology is ambiguous, use a logical cause-to-impact order.
 3. Granularity: Each item must describe ONE causal step (e.g., trigger, intermediate process, or final consequence).
 4. Labeling: Keep "type_event" standardized, short, and reusable as a class label (e.g., "Extreme Precipitation", "Soil Saturation", "Landslide", "Infrastructure Damage", "Displacement").
 5. Description: Keep "description" concise (one short sentence).
-6. Evidence: You MUST provide a short, exact quote from the news articles in the "supporting_quote" field to prove the event occurred.
+6. Evidence: You MUST provide a short, exact quote copied from the news articles in the "supporting_quote" field. Do not add ellipses unless they appear in the source text.
 7. Metadata use: Use event metadata only to identify the target event and basic context. Do not create causal steps from metadata alone unless they are also supported by a news quote.
-8. Fallback: If the causal chain cannot be extracted from the available information, return an empty causal_chain list [].
+8. Fallback: Return an empty causal_chain list [] only when the news articles do not support any causal disaster step or impact for the target event.
 9. Output Format: Return ONLY raw, valid JSON. Do not include explanations, greetings, or markdown formatting like ```json. Start directly with {{ and end with }}.
 
 Required JSON format:
@@ -60,13 +60,13 @@ Required JSON format:
       "n_event": 1,
       "type_event": "Extreme Precipitation",
       "description": "Heavy rainfall of 150mm occurred over 24 hours.",
-      "supporting_quote": "...torrential downpours hit the region on Tuesday..."
+      "supporting_quote": "torrential downpours hit the region on Tuesday"
     }},
     {{
       "n_event": 2,
       "type_event": "Landslide",
       "description": "The saturated soil caused a slope to collapse.",
-      "supporting_quote": "...the weakened hillside gave way, burying homes..."
+      "supporting_quote": "the weakened hillside gave way, burying homes"
     }}
   ]
 }}
@@ -635,6 +635,8 @@ def format_articles(
 
     stats = {
         "news_count": len(article_list),
+        "relevant_news_count": len(relevant_articles),
+        "news_rejected_by_relevance_filter": len(article_list) - len(relevant_articles),
         "summary_relevant_news_count": len(relevant_articles),
         "news_rejected_for_summary": len(article_list) - len(relevant_articles),
         "selected_news_count": len(selected),

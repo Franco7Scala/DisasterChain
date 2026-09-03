@@ -46,8 +46,8 @@ COVERAGE_COLUMNS = [
     "latitude",
     "longitude",
     "news_count",
-    "summary_relevant_news_count",
-    "news_rejected_for_summary",
+    "causal_relevant_news_count",
+    "news_rejected_for_causal_chain",
     "selected_news_count",
     "usable_news_count",
     "news_sources_count",
@@ -194,8 +194,8 @@ def main() -> None:
             "event_id": event_id,
             **output_metadata(record, event_row),
             "news_count": context.get("news_count", 0),
-            "summary_relevant_news_count": context.get("summary_relevant_news_count", 0),
-            "news_rejected_for_summary": context.get("news_rejected_for_summary", 0),
+            "causal_relevant_news_count": context.get("relevant_news_count", 0),
+            "news_rejected_for_causal_chain": context.get("news_rejected_by_relevance_filter", 0),
             "selected_news_count": context.get("selected_news_count", 0),
             "usable_news_count": context.get("usable_news_count", 0),
             "news_sources_count": context.get("news_sources_count", 0),
@@ -205,7 +205,7 @@ def main() -> None:
 
         print(
             f"[{position}/{total}] {event_id}: "
-            f"relevant={coverage_row['summary_relevant_news_count']}/"
+            f"relevant={coverage_row['causal_relevant_news_count']}/"
             f"{coverage_row['news_count']} "
             f"news={coverage_row['usable_news_count']} "
             f"quality={coverage_row['news_input_quality']}",
