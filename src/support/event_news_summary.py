@@ -7,7 +7,7 @@ from typing import Any, Dict, Iterable, List, Mapping, Optional, Tuple
 
 
 SUMMARY_PROMPT_VERSION = "event_news_summary_v6"
-CAUSAL_CHAIN_PROMPT_VERSION = "event_causal_chain_v4"
+CAUSAL_CHAIN_PROMPT_VERSION = "event_causal_chain_v5"
 INSUFFICIENT_INFORMATION = "INSUFFICIENT_INFORMATION"
 
 SUMMARY_PROMPT_TEMPLATE = """You are an expert journalistic summarizer analyzing disaster event records and related news articles.
@@ -778,6 +778,33 @@ def parse_causal_chain_response(response: Any) -> Tuple[List[Dict[str, Any]], st
         return normalized, "parsed_with_dropped_items"
     return normalized, "parsed"
 
+
+# Checks that the supporting quote is actually present in the news block.
+def quote_is_supported_by_news(quote: Any, news_articles: Any) -> bool:
+    quote_key = lookup_key(quote)
+    news_key = lookup_key(news_articles)
+    if len(quote_key) < 10 or not news_key:
+        return False
+    return quote_key in news_key
+
+
+# Drops causal-chain steps whose evidence quote is not found in the news text.
+def validate_causal_chain_quotes(
+    causal_chain: List[Dict[str, Any]],
+    news_articles: Any,
+) -> Tuple[List[Dict[str, Any]], int]:
+    validated: List[Dict[str, Any]] = []
+    dropped = 0
+    for item in causal_chain:
+        if quote_is_supported_by_news(item.get("supporting_quote"), news_articles):
+            validated_item = dict(item)
+            validated_item["n_event"] = len(validated) + 1
+            validated.append(validated_item)
+        else:
+            dropped += 1
+    return validated, dropped
+
+
 # Builds the prompt, calls the Reasoner, and returns the summary fields.
 def summarize_event_from_news(
     reasoner: Any,
@@ -809,6 +836,16 @@ def extract_causal_chain_from_news(
     prompt = build_causal_chain_prompt(context)
     raw_response = reasoner.ask(prompt, max_new_tokens=max_new_tokens)
     causal_chain, parse_status = parse_causal_chain_response(raw_response)
+    causal_chain, dropped_quotes = validate_causal_chain_quotes(
+        causal_chain,
+        context.get("news_articles", ""),
+    )
+    if dropped_quotes:
+        parse_status = (
+            "empty_chain_after_quote_validation"
+            if not causal_chain
+            else "parsed_with_dropped_unsupported_quotes"
+        )
     return {
         "causal_chain": causal_chain,
         "causal_chain_json": json.dumps({"causal_chain": causal_chain}, ensure_ascii=False),
@@ -816,4 +853,5 @@ def extract_causal_chain_from_news(
         "causal_chain_parse_status": parse_status,
         "causal_chain_raw_response": raw_response,
         "causal_chain_prompt_version": CAUSAL_CHAIN_PROMPT_VERSION,
+        "causal_chain_dropped_quote_steps": dropped_quotes,
     }
