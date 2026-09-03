@@ -21,8 +21,10 @@ from generate_event_news_summaries import (
 )
 from support.event_news_summary import (
     CAUSAL_CHAIN_PROMPT_VERSION,
+    INSUFFICIENT_INFORMATION,
     build_causal_chain_prompt,
     build_event_news_context,
+    clean_text,
     extract_causal_chain_from_news,
 )
 from support.reasoner import Reasoner
@@ -32,6 +34,9 @@ DEFAULT_INPUT_JSON = (
     DEFAULT_OUTPUT_DIR / "final_environmental_causal_dataset_2014_plus_news.json"
 )
 DEFAULT_CAUSAL_CHAIN_MODEL = "Qwen/Qwen2.5-72B-Instruct"
+DEFAULT_SUMMARY_CSV = (
+    DEFAULT_OUTPUT_DIR / "event_news_summaries_2014_plus_llm70b_v5_validated.csv"
+)
 DEFAULT_OUTPUT_JSONL = DEFAULT_OUTPUT_DIR / "event_causal_chains.jsonl"
 DEFAULT_OUTPUT_CSV = DEFAULT_OUTPUT_DIR / "event_causal_chains.csv"
 DEFAULT_COVERAGE_CSV = DEFAULT_OUTPUT_DIR / "event_causal_chains_coverage.csv"
@@ -45,6 +50,7 @@ COVERAGE_COLUMNS = [
     "position_source",
     "latitude",
     "longitude",
+    "summary_validation_status",
     "news_count",
     "causal_relevant_news_count",
     "news_rejected_for_causal_chain",
@@ -104,6 +110,44 @@ def empty_causal_chain_fields(parse_status: str) -> Dict[str, Any]:
     }
 
 
+# Reads the validated summary status used to decide which events are safe to call.
+def read_summary_status(path: Optional[Path]) -> Dict[str, str]:
+    if path is None:
+        return {}
+    if not path.exists():
+        print(f"Warning: summary CSV not found, continuing without it: {path}")
+        return {}
+
+    frame = pd.read_csv(path, dtype=object)
+    if "event_id" not in frame.columns:
+        print(f"Warning: summary CSV has no event_id column, ignoring: {path}")
+        return {}
+
+    statuses: Dict[str, str] = {}
+    for _, row in frame.iterrows():
+        event_id = clean_text(row.get("event_id"))
+        if not event_id:
+            continue
+        status = clean_text(row.get("summary_validation_status"))
+        summary = clean_text(row.get("event_summary"))
+        if not status:
+            status = "accepted" if summary and summary != INSUFFICIENT_INFORMATION else "not_accepted"
+        statuses[event_id] = status
+    return statuses
+
+
+# Keeps only records whose summary was accepted in the previous phase.
+def accepted_summary_records(
+    records: list[tuple[str, Dict[str, Any]]],
+    summary_status_by_event: Mapping[str, str],
+) -> list[tuple[str, Dict[str, Any]]]:
+    return [
+        (event_id, record)
+        for event_id, record in records
+        if summary_status_by_event.get(event_id) == "accepted"
+    ]
+
+
 # Defines the command-line options for causal-chain generation.
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
@@ -111,6 +155,7 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--input-json", default=str(DEFAULT_INPUT_JSON))
     parser.add_argument("--event-csv", default=str(DEFAULT_EVENT_CSV))
+    parser.add_argument("--summary-csv", default=str(DEFAULT_SUMMARY_CSV))
     parser.add_argument("--output-jsonl", default=str(DEFAULT_OUTPUT_JSONL))
     parser.add_argument("--output-csv", default=str(DEFAULT_OUTPUT_CSV))
     parser.add_argument("--coverage-csv", default=str(DEFAULT_COVERAGE_CSV))
@@ -125,6 +170,16 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--load-in-8bit", action="store_true")
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--force", action="store_true")
+    parser.add_argument(
+        "--require-accepted-summary",
+        action="store_true",
+        help="Skip LLM calls for events whose validated summary was not accepted.",
+    )
+    parser.add_argument(
+        "--accepted-summary-only",
+        action="store_true",
+        help="Apply offset and limit only to events with an accepted summary.",
+    )
     parser.add_argument(
         "--include-prompts",
         action="store_true",
@@ -144,17 +199,27 @@ def main() -> None:
 
     input_json = Path(args.input_json)
     event_csv = Path(args.event_csv) if args.event_csv else None
+    summary_csv = Path(args.summary_csv) if args.summary_csv else None
     output_jsonl = Path(args.output_jsonl)
     output_csv = Path(args.output_csv)
     coverage_csv = Path(args.coverage_csv)
 
     records = read_dataset(input_json)
     event_rows = read_event_rows(event_csv)
+    summary_status_by_event = read_summary_status(summary_csv)
+    if (args.require_accepted_summary or args.accepted_summary_only) and not summary_status_by_event:
+        raise SystemExit("Accepted-summary filtering requires a readable --summary-csv")
+
+    records_for_selection = (
+        accepted_summary_records(records, summary_status_by_event)
+        if args.accepted_summary_only
+        else records
+    )
     metadata_by_event = {
         event_id: output_metadata(record, event_rows.get(event_id))
         for event_id, record in records
     }
-    selected = selected_records(records, offset=args.offset, limit=args.limit)
+    selected = selected_records(records_for_selection, offset=args.offset, limit=args.limit)
 
     if args.force and output_jsonl.exists():
         output_jsonl.unlink()
@@ -193,6 +258,7 @@ def main() -> None:
         coverage_row = {
             "event_id": event_id,
             **output_metadata(record, event_row),
+            "summary_validation_status": summary_status_by_event.get(event_id, ""),
             "news_count": context.get("news_count", 0),
             "causal_relevant_news_count": context.get("relevant_news_count", 0),
             "news_rejected_for_causal_chain": context.get("news_rejected_by_relevance_filter", 0),
@@ -223,6 +289,12 @@ def main() -> None:
 
         if args.dry_run:
             output_row.update(empty_causal_chain_fields("dry_run"))
+        elif (
+            args.require_accepted_summary
+            and summary_status_by_event.get(event_id) != "accepted"
+        ):
+            output_row.update(empty_causal_chain_fields("skipped_no_accepted_summary"))
+            output_row["llm_call_status"] = "skipped_no_accepted_summary"
         elif (
             context.get("news_input_quality") == "insufficient"
             and not args.call_llm_on_insufficient
