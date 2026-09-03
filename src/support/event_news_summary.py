@@ -7,7 +7,7 @@ from typing import Any, Dict, Iterable, List, Mapping, Optional, Tuple
 
 
 SUMMARY_PROMPT_VERSION = "event_news_summary_v6"
-CAUSAL_CHAIN_PROMPT_VERSION = "event_causal_chain_v1"
+CAUSAL_CHAIN_PROMPT_VERSION = "event_causal_chain_v2"
 INSUFFICIENT_INFORMATION = "INSUFFICIENT_INFORMATION"
 
 SUMMARY_PROMPT_TEMPLATE = """You are an expert journalistic summarizer analyzing disaster event records and related news articles.
@@ -49,8 +49,9 @@ Rules:
 4. Labeling: Keep "type_event" standardized, short, and reusable as a class label (e.g., "Extreme Precipitation", "Soil Saturation", "Landslide", "Infrastructure Damage", "Displacement").
 5. Description: Keep "description" concise (one short sentence).
 6. Evidence: You MUST provide a short, exact quote from the news articles in the "supporting_quote" field to prove the event occurred.
-7. Fallback: If the causal chain cannot be extracted from the available information, return an empty causal_chain list [].
-8. Output Format: Return ONLY raw, valid JSON. Do not include explanations, greetings, or markdown formatting like `json. Start directly with {{ and end with }}.
+7. Metadata use: Use event metadata only to identify the target event and basic context. Do not create causal steps from metadata alone unless they are also supported by a news quote.
+8. Fallback: If the causal chain cannot be extracted from the available information, return an empty causal_chain list [].
+9. Output Format: Return ONLY raw, valid JSON. Do not include explanations, greetings, or markdown formatting like ```json. Start directly with {{ and end with }}.
 
 Required JSON format:
 {{
