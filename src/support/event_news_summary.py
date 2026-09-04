@@ -8,7 +8,7 @@ from typing import Any, Dict, Iterable, List, Mapping, Optional, Tuple
 
 
 SUMMARY_PROMPT_VERSION = "event_news_summary_v6"
-CAUSAL_CHAIN_PROMPT_VERSION = "event_causal_chain_v6"
+CAUSAL_CHAIN_PROMPT_VERSION = "event_causal_chain_v7"
 INSUFFICIENT_INFORMATION = "INSUFFICIENT_INFORMATION"
 FUZZY_QUOTE_MATCH_THRESHOLD = 0.80
 
@@ -53,10 +53,11 @@ Rules:
 6. Direct impacts: If the news states that the event caused deaths, injuries, displacement, affected people, damage, evacuations, outages, flooding, or other consequences, include those impacts as causal steps.
 7. Labeling: Keep "type_event" standardized, short, and reusable as a class label (e.g., "Extreme Precipitation", "Soil Saturation", "Landslide", "Infrastructure Damage", "Displacement").
 8. Description: Keep "description" concise (one short sentence).
-9. Evidence: You MUST provide a short, exact quote copied from the news articles in the "supporting_quote" field. Do not add ellipses unless they appear in the source text.
-10. Metadata use: Use event metadata only to identify the target event and basic context. Do not create causal steps from metadata alone unless they are also supported by a news quote.
-11. Fallback: Return an empty causal_chain list [] only when the news articles do not support any causal disaster step or impact for the target event.
-12. Output Format: Return ONLY raw, valid JSON. Do not include explanations, greetings, or markdown formatting like ```json. Start directly with {{ and end with }}.
+9. Evidence: You MUST provide a short, exact quote copied as one continuous substring from the news article text in the "supporting_quote" field. Prefer 5-25 words. Do not rewrite, paraphrase, merge separate fragments, or add ellipses unless they appear in the source text.
+10. Quote discipline: If no continuous quote from the news article text supports a causal step, omit that step instead of inventing or reconstructing a quote.
+11. Metadata use: Use event metadata only to identify the target event and basic context. Do not create causal steps from metadata alone unless they are also supported by a news quote.
+12. Fallback: Return an empty causal_chain list [] only when the news articles do not support any causal disaster step or impact for the target event.
+13. Output Format: Return ONLY raw, valid JSON. Do not include explanations, greetings, or markdown formatting like ```json. Start directly with {{ and end with }}.
 
 Required JSON format:
 {{
