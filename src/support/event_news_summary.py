@@ -2,13 +2,15 @@ from __future__ import annotations
 
 import json
 import re
+from difflib import SequenceMatcher
 from email.utils import parsedate_to_datetime
 from typing import Any, Dict, Iterable, List, Mapping, Optional, Tuple
 
 
 SUMMARY_PROMPT_VERSION = "event_news_summary_v6"
-CAUSAL_CHAIN_PROMPT_VERSION = "event_causal_chain_v5"
+CAUSAL_CHAIN_PROMPT_VERSION = "event_causal_chain_v6"
 INSUFFICIENT_INFORMATION = "INSUFFICIENT_INFORMATION"
+FUZZY_QUOTE_MATCH_THRESHOLD = 0.80
 
 SUMMARY_PROMPT_TEMPLATE = """You are an expert journalistic summarizer analyzing disaster event records and related news articles.
 
@@ -45,15 +47,16 @@ For this task, a "causal chain" is a direct sequence of interconnected physical 
 Rules:
 1. Grounding: Do not invent causal links. Every extracted event must be explicitly supported by the news text.
 2. Order: Extract the sequence of relevant causal events in chronological order. If chronology is ambiguous, use a logical cause-to-impact order.
-3. Granularity: Each item must describe ONE causal step (e.g., trigger, intermediate process, or final consequence).
-4. Partial chains: If the initial trigger is not reported, start with the first reported disaster process or accident (e.g., "Storm", "Fire", "Boat Capsizing", "Earthquake") and then add its explicitly reported impacts.
-5. Direct impacts: If the news states that the event caused deaths, injuries, displacement, affected people, damage, evacuations, outages, flooding, or other consequences, include those impacts as causal steps.
-6. Labeling: Keep "type_event" standardized, short, and reusable as a class label (e.g., "Extreme Precipitation", "Soil Saturation", "Landslide", "Infrastructure Damage", "Displacement").
-7. Description: Keep "description" concise (one short sentence).
-8. Evidence: You MUST provide a short, exact quote copied from the news articles in the "supporting_quote" field. Do not add ellipses unless they appear in the source text.
-9. Metadata use: Use event metadata only to identify the target event and basic context. Do not create causal steps from metadata alone unless they are also supported by a news quote.
-10. Fallback: Return an empty causal_chain list [] only when the news articles do not support any causal disaster step or impact for the target event.
-11. Output Format: Return ONLY raw, valid JSON. Do not include explanations, greetings, or markdown formatting like ```json. Start directly with {{ and end with }}.
+3. Granularity: Break down the event into micro-steps. Do not group multiple consequences into one step. Look specifically for intermediate environmental triggers (e.g., Rainfall -> River overflow -> Bank breach) and cascading socio-economic impacts (e.g., Crop destruction -> Food shortage).
+4. Single step: Each item must describe ONE causal step (e.g., trigger, intermediate process, or final consequence).
+5. Partial chains: If the initial trigger is not reported, start with the first reported disaster process or accident (e.g., "Storm", "Fire", "Boat Capsizing", "Earthquake") and then add its explicitly reported impacts.
+6. Direct impacts: If the news states that the event caused deaths, injuries, displacement, affected people, damage, evacuations, outages, flooding, or other consequences, include those impacts as causal steps.
+7. Labeling: Keep "type_event" standardized, short, and reusable as a class label (e.g., "Extreme Precipitation", "Soil Saturation", "Landslide", "Infrastructure Damage", "Displacement").
+8. Description: Keep "description" concise (one short sentence).
+9. Evidence: You MUST provide a short, exact quote copied from the news articles in the "supporting_quote" field. Do not add ellipses unless they appear in the source text.
+10. Metadata use: Use event metadata only to identify the target event and basic context. Do not create causal steps from metadata alone unless they are also supported by a news quote.
+11. Fallback: Return an empty causal_chain list [] only when the news articles do not support any causal disaster step or impact for the target event.
+12. Output Format: Return ONLY raw, valid JSON. Do not include explanations, greetings, or markdown formatting like ```json. Start directly with {{ and end with }}.
 
 Required JSON format:
 {{
@@ -779,30 +782,61 @@ def parse_causal_chain_response(response: Any) -> Tuple[List[Dict[str, Any]], st
     return normalized, "parsed"
 
 
-# Checks that the supporting quote is actually present in the news block.
-def quote_is_supported_by_news(quote: Any, news_articles: Any) -> bool:
+# Returns how much of the quote can be matched inside the news block.
+def quote_news_match_ratio(quote: Any, news_articles: Any) -> float:
+    quote_text = clean_text(quote)
+    news_text = clean_text(news_articles)
+    if quote_text and quote_text in news_text:
+        return 1.0
+
     quote_key = lookup_key(quote)
     news_key = lookup_key(news_articles)
     if len(quote_key) < 10 or not news_key:
-        return False
-    return quote_key in news_key
+        return 0.0
+    if quote_key in news_key:
+        return 1.0
+
+    match = SequenceMatcher(None, quote_key, news_key).find_longest_match(
+        0,
+        len(quote_key),
+        0,
+        len(news_key),
+    )
+    return match.size / len(quote_key)
+
+
+# Checks that the supporting quote is close enough to text in the news block.
+def quote_is_supported_by_news(quote: Any, news_articles: Any) -> Tuple[bool, bool]:
+    match_ratio = quote_news_match_ratio(quote, news_articles)
+    if match_ratio >= 1.0:
+        return True, False
+    if match_ratio >= FUZZY_QUOTE_MATCH_THRESHOLD:
+        return True, True
+    return False, False
 
 
 # Drops causal-chain steps whose evidence quote is not found in the news text.
 def validate_causal_chain_quotes(
     causal_chain: List[Dict[str, Any]],
     news_articles: Any,
-) -> Tuple[List[Dict[str, Any]], int]:
+) -> Tuple[List[Dict[str, Any]], int, int]:
     validated: List[Dict[str, Any]] = []
     dropped = 0
+    fuzzy_matched = 0
     for item in causal_chain:
-        if quote_is_supported_by_news(item.get("supporting_quote"), news_articles):
+        is_supported, used_fuzzy = quote_is_supported_by_news(
+            item.get("supporting_quote"),
+            news_articles,
+        )
+        if is_supported:
             validated_item = dict(item)
             validated_item["n_event"] = len(validated) + 1
             validated.append(validated_item)
+            if used_fuzzy:
+                fuzzy_matched += 1
         else:
             dropped += 1
-    return validated, dropped
+    return validated, dropped, fuzzy_matched
 
 
 # Builds the prompt, calls the Reasoner, and returns the summary fields.
@@ -836,7 +870,7 @@ def extract_causal_chain_from_news(
     prompt = build_causal_chain_prompt(context)
     raw_response = reasoner.ask(prompt, max_new_tokens=max_new_tokens)
     causal_chain, parse_status = parse_causal_chain_response(raw_response)
-    causal_chain, dropped_quotes = validate_causal_chain_quotes(
+    causal_chain, dropped_quotes, fuzzy_quote_steps = validate_causal_chain_quotes(
         causal_chain,
         context.get("news_articles", ""),
     )
@@ -854,4 +888,5 @@ def extract_causal_chain_from_news(
         "causal_chain_raw_response": raw_response,
         "causal_chain_prompt_version": CAUSAL_CHAIN_PROMPT_VERSION,
         "causal_chain_dropped_quote_steps": dropped_quotes,
+        "causal_chain_fuzzy_quote_steps": fuzzy_quote_steps,
     }
