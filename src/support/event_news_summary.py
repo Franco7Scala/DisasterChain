@@ -8,7 +8,7 @@ from typing import Any, Dict, Iterable, List, Mapping, Optional, Tuple
 
 
 SUMMARY_PROMPT_VERSION = "event_news_summary_v6"
-CAUSAL_CHAIN_PROMPT_VERSION = "event_causal_chain_v7"
+CAUSAL_CHAIN_PROMPT_VERSION = "event_causal_chain_v8"
 INSUFFICIENT_INFORMATION = "INSUFFICIENT_INFORMATION"
 FUZZY_QUOTE_MATCH_THRESHOLD = 0.80
 
@@ -53,8 +53,8 @@ Rules:
 6. Direct impacts: If the news states that the event caused deaths, injuries, displacement, affected people, damage, evacuations, outages, flooding, or other consequences, include those impacts as causal steps.
 7. Labeling: Keep "type_event" standardized, short, and reusable as a class label (e.g., "Extreme Precipitation", "Soil Saturation", "Landslide", "Infrastructure Damage", "Displacement").
 8. Description: Keep "description" concise (one short sentence).
-9. Evidence: You MUST provide a short, exact quote copied as one continuous substring from the news article text in the "supporting_quote" field. Prefer 5-25 words. Do not rewrite, paraphrase, merge separate fragments, or add ellipses unless they appear in the source text.
-10. Quote discipline: If no continuous quote from the news article text supports a causal step, omit that step instead of inventing or reconstructing a quote.
+9. Evidence: You MUST provide a short, exact quote copied from the news articles in the "supporting_quote" field. Prefer 5-25 words from one sentence or title. Do not rewrite, paraphrase, merge separate fragments, or add ellipses unless they appear in the source text.
+10. Quote discipline: Use the shortest quote that directly supports the step and avoid metadata-only fields unless the same detail is also present in the news text.
 11. Metadata use: Use event metadata only to identify the target event and basic context. Do not create causal steps from metadata alone unless they are also supported by a news quote.
 12. Fallback: Return an empty causal_chain list [] only when the news articles do not support any causal disaster step or impact for the target event.
 13. Output Format: Return ONLY raw, valid JSON. Do not include explanations, greetings, or markdown formatting like ```json. Start directly with {{ and end with }}.
@@ -258,6 +258,41 @@ def lookup_key(value: Any) -> str:
     text = str(value or "").lower()
     text = re.sub(r"[^a-z0-9]+", " ", text)
     return re.sub(r"\s+", " ", text).strip()
+
+
+# Computes a partial fuzzy ratio between a quote and a longer news string.
+def partial_sequence_match_ratio(needle: str, haystack: str) -> float:
+    if not needle or not haystack:
+        return 0.0
+    if needle in haystack:
+        return 1.0
+    if len(haystack) <= len(needle):
+        return SequenceMatcher(None, needle, haystack, autojunk=False).ratio()
+
+    matcher = SequenceMatcher(None, needle, haystack, autojunk=False)
+    best_ratio = 0.0
+    for match in matcher.get_matching_blocks():
+        start = max(match.b - match.a, 0)
+        window = haystack[start : start + len(needle)]
+        if not window:
+            continue
+        ratio = SequenceMatcher(None, needle, window, autojunk=False).ratio()
+        best_ratio = max(best_ratio, ratio)
+        if best_ratio >= FUZZY_QUOTE_MATCH_THRESHOLD:
+            break
+    return best_ratio
+
+
+# Computes how many quote tokens can be found in order inside the news text.
+def token_sequence_match_ratio(quote_key: str, news_key: str) -> float:
+    quote_tokens = quote_key.split()
+    news_tokens = news_key.split()
+    if len(quote_tokens) < 6 or not news_tokens:
+        return 0.0
+
+    matcher = SequenceMatcher(None, quote_tokens, news_tokens, autojunk=False)
+    matched_tokens = sum(match.size for match in matcher.get_matching_blocks())
+    return matched_tokens / len(quote_tokens)
 
 
 # Removes descriptive prefixes from EM-DAT location fragments.
@@ -797,13 +832,10 @@ def quote_news_match_ratio(quote: Any, news_articles: Any) -> float:
     if quote_key in news_key:
         return 1.0
 
-    match = SequenceMatcher(None, quote_key, news_key).find_longest_match(
-        0,
-        len(quote_key),
-        0,
-        len(news_key),
+    return max(
+        partial_sequence_match_ratio(quote_key, news_key),
+        token_sequence_match_ratio(quote_key, news_key),
     )
-    return match.size / len(quote_key)
 
 
 # Checks that the supporting quote is close enough to text in the news block.
