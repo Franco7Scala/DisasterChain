@@ -65,6 +65,7 @@ COVERAGE_COLUMNS = [
     "causal_chain_prompt_version",
     "causal_chain_dropped_quote_steps",
     "causal_chain_fuzzy_quote_steps",
+    "causal_chain_type_normalizer_version",
 ]
 
 
@@ -111,6 +112,7 @@ def empty_causal_chain_fields(parse_status: str) -> Dict[str, Any]:
         "causal_chain_prompt_version": CAUSAL_CHAIN_PROMPT_VERSION,
         "causal_chain_dropped_quote_steps": 0,
         "causal_chain_fuzzy_quote_steps": 0,
+        "causal_chain_type_normalizer_version": "",
     }
 
 

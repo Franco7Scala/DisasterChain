@@ -11,6 +11,7 @@ SUMMARY_PROMPT_VERSION = "event_news_summary_v6"
 CAUSAL_CHAIN_PROMPT_VERSION = "event_causal_chain_v8"
 INSUFFICIENT_INFORMATION = "INSUFFICIENT_INFORMATION"
 FUZZY_QUOTE_MATCH_THRESHOLD = 0.80
+CAUSAL_CHAIN_TYPE_NORMALIZER_VERSION = "causal_chain_type_normalizer_v1"
 
 SUMMARY_PROMPT_TEMPLATE = """You are an expert journalistic summarizer analyzing disaster event records and related news articles.
 
@@ -235,6 +236,120 @@ SUMMARY_UNSUPPORTED_RESPONSE_PATTERNS = [
     r"\bbased on the available information, it can be inferred\b",
     r"\bmetadata (confirms|indicates)\b.*\bnews articles?\b.*\bprimarily focus\b",
 ]
+CAUSAL_EVENT_TYPE_ALIASES = {
+    "affected people": "Affected Population",
+    "affected population": "Affected Population",
+    "agricultural damage": "Agricultural Damage",
+    "agriculture damage": "Agricultural Damage",
+    "air accident": "Air Accident",
+    "air crash": "Air Accident",
+    "aircraft crash": "Air Accident",
+    "bank breach": "Riverbank Breach",
+    "bridge collapse": "Infrastructure Damage",
+    "building collapse": "Infrastructure Damage",
+    "casualties": "Casualties",
+    "casualty": "Casualties",
+    "crop damage": "Crop Damage",
+    "crop destruction": "Crop Damage",
+    "crop loss": "Crop Damage",
+    "dam failure": "Dam Failure",
+    "deaths": "Casualties",
+    "death": "Casualties",
+    "debris flow": "Landslide",
+    "displaced people": "Displacement",
+    "displacement": "Displacement",
+    "disease outbreak": "Disease Outbreak",
+    "earthquake": "Earthquake",
+    "economic damage": "Economic Impact",
+    "economic impact": "Economic Impact",
+    "evacuation": "Evacuation",
+    "evacuations": "Evacuation",
+    "explosion": "Explosion",
+    "fatalities": "Casualties",
+    "fatality": "Casualties",
+    "fire": "Fire",
+    "flash flood": "Flash Flood",
+    "flash flooding": "Flash Flood",
+    "flood": "Flood",
+    "flooding": "Flood",
+    "floods": "Flood",
+    "food insecurity": "Food Shortage",
+    "food shortage": "Food Shortage",
+    "gas leak": "Gas Leak",
+    "heavy rain": "Extreme Precipitation",
+    "heavy rainfall": "Extreme Precipitation",
+    "industrial explosion": "Explosion",
+    "infrastructure damage": "Infrastructure Damage",
+    "injured": "Injuries",
+    "injuries": "Injuries",
+    "injury": "Injuries",
+    "landslide": "Landslide",
+    "landslides": "Landslide",
+    "levee breach": "Riverbank Breach",
+    "mudslide": "Landslide",
+    "mudslides": "Landslide",
+    "overflow": "River Overflow",
+    "power outage": "Power Outage",
+    "property damage": "Property Damage",
+    "rail accident": "Rail Accident",
+    "river flood": "River Overflow",
+    "river flooding": "River Overflow",
+    "river overflow": "River Overflow",
+    "road accident": "Road Accident",
+    "soil saturation": "Soil Saturation",
+    "storm": "Storm",
+    "storm surge": "Storm Surge",
+    "strong wind": "Strong Wind",
+    "strong winds": "Strong Wind",
+    "torrential rain": "Extreme Precipitation",
+    "transport disruption": "Transport Disruption",
+    "tropical cyclone": "Tropical Cyclone",
+    "tsunami": "Tsunami",
+    "volcanic activity": "Volcanic Eruption",
+    "volcanic eruption": "Volcanic Eruption",
+    "water contamination": "Water Contamination",
+    "wildfire": "Wildfire",
+}
+CAUSAL_EVENT_TYPE_PATTERNS = [
+    (r"\bflash\s+flood", "Flash Flood"),
+    (r"\bstorm\s+surge", "Storm Surge"),
+    (r"\b(river|stream|waterway)\s+(overflow|flood)", "River Overflow"),
+    (r"\b(overflow|overflowing)\s+(river|stream|waterway)", "River Overflow"),
+    (r"\b(bank|levee|riverbank)\s+breach", "Riverbank Breach"),
+    (r"\b(heavy|torrential|intense|extreme)\s+(rain|rainfall|precipitation)", "Extreme Precipitation"),
+    (r"\b(cyclone|hurricane|typhoon|tropical\s+storm)", "Tropical Cyclone"),
+    (r"\b(strong|high|violent)\s+winds?", "Strong Wind"),
+    (r"\bflooded\s+(homes?|houses?|buildings?|properties)", "Property Damage"),
+    (r"\bflooded\s+(roads?|bridges?)", "Transport Disruption"),
+    (r"\bflood", "Flood"),
+    (r"\b(landslide|mudslide|rockslide|debris\s+flow)", "Landslide"),
+    (r"\b(earthquake|quake|seismic\s+event|tremor)", "Earthquake"),
+    (r"\btsunami", "Tsunami"),
+    (r"\b(volcanic|volcano).*\b(eruption|activity)", "Volcanic Eruption"),
+    (r"\bwild\s*fire|\bforest\s+fire|\bbushfire", "Wildfire"),
+    (r"\bfire\b|\bblaze\b", "Fire"),
+    (r"\b(gas|chemical).*\bleak", "Gas Leak"),
+    (r"\bexplosion|\bblast", "Explosion"),
+    (r"\b(collapse|collapsed)", "Infrastructure Damage"),
+    (r"\b(infrastructure|bridge|road|building|school|hospital).*\bdamage", "Infrastructure Damage"),
+    (r"\b(property|house|home|shelter).*\bdamage", "Property Damage"),
+    (r"\b(crop|agricultural|agriculture).*\b(damage|destruction|loss)", "Crop Damage"),
+    (r"\b(food\s+shortage|food\s+insecurity|hunger)", "Food Shortage"),
+    (r"\b(displacement|displaced|homeless)", "Displacement"),
+    (r"\bevacuat", "Evacuation"),
+    (r"\b(death|deaths|fatalit|casualt|killed|loss\s+of\s+life)", "Casualties"),
+    (r"\b(injur|wounded)", "Injuries"),
+    (r"\b(affected\s+people|affected\s+population|families\s+affected)", "Affected Population"),
+    (r"\b(outbreak|epidemic|disease)", "Disease Outbreak"),
+    (r"\b(power|electricity).*\b(outage|blackout|disruption)", "Power Outage"),
+    (r"\b(water).*\b(contamination|pollution)", "Water Contamination"),
+    (r"\b(road|traffic|bus|vehicle).*\b(accident|crash|collision)", "Road Accident"),
+    (r"\b(train|rail).*\b(accident|derailment|crash|collision)", "Rail Accident"),
+    (r"\b(air|plane|aircraft|aviation).*\b(accident|crash)", "Air Accident"),
+    (r"\b(boat|ship|ferry).*\b(capsiz|sink|wreck|accident)", "Water Accident"),
+    (r"\b(transport|road|rail|airport).*\b(disruption|closure|blocked)", "Transport Disruption"),
+    (r"\b(economic|financial).*\b(impact|loss|damage)", "Economic Impact"),
+]
 
 # Cleans text values before they are inserted into prompts or outputs.
 def clean_text(value: Any) -> str:
@@ -258,6 +373,28 @@ def lookup_key(value: Any) -> str:
     text = str(value or "").lower()
     text = re.sub(r"[^a-z0-9]+", " ", text)
     return re.sub(r"\s+", " ", text).strip()
+
+
+# Converts a causal-chain label to a stable reusable event type.
+def normalize_causal_event_type(value: Any) -> str:
+    text = clean_text(value)
+    if not text:
+        return ""
+
+    key = lookup_key(text)
+    if key in CAUSAL_EVENT_TYPE_ALIASES:
+        return CAUSAL_EVENT_TYPE_ALIASES[key]
+
+    for pattern, normalized in CAUSAL_EVENT_TYPE_PATTERNS:
+        if re.search(pattern, key):
+            return normalized
+
+    words = []
+    for word in re.split(r"[\s_/()-]+", text):
+        cleaned = re.sub(r"[^A-Za-z0-9]+", "", word)
+        if cleaned:
+            words.append(cleaned.capitalize())
+    return " ".join(words) if words else text
 
 
 # Computes a partial fuzzy ratio between a quote and a longer news string.
@@ -772,7 +909,7 @@ def response_json_text(response: Any) -> str:
 
 # Normalizes one causal-chain step returned by the LLM.
 def normalize_causal_chain_item(item: Mapping[str, Any], sequence_number: int) -> Optional[Dict[str, Any]]:
-    type_event = clean_text(item.get("type_event"))
+    type_event = normalize_causal_event_type(item.get("type_event"))
     description = clean_text(item.get("description"))
     supporting_quote = clean_text(item.get("supporting_quote"))
     if not type_event or not description or not supporting_quote:
@@ -922,4 +1059,5 @@ def extract_causal_chain_from_news(
         "causal_chain_prompt_version": CAUSAL_CHAIN_PROMPT_VERSION,
         "causal_chain_dropped_quote_steps": dropped_quotes,
         "causal_chain_fuzzy_quote_steps": fuzzy_quote_steps,
+        "causal_chain_type_normalizer_version": CAUSAL_CHAIN_TYPE_NORMALIZER_VERSION,
     }
