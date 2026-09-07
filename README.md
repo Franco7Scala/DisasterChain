@@ -11,13 +11,90 @@ This pipeline is designed to be fully automated, modular, and resilient. However
 3. Run the pipeline once using the command below; this will automatically generate the required directory tree structure (including the `data/` and `results/` folders).
 4. Place your raw CSV files inside the newly created `data/` directory, ensuring they match the expected file names configured in `support/constants.py`.
 
-### Running the Pipeline
+### Running the Legacy Pipeline
 
-To execute the entire dataset compilation, weather data fetching, and causal aggregation loop, simply run the main script from the root directory:
+To execute the original dataset compilation, weather data fetching, and checkpointed
+news loop, run the legacy entry point from the root directory:
 
 ```bash
 python src/main.py
 ```
+
+The explicit equivalent is:
+
+```bash
+python src/main.py legacy
+```
+
+### Running the Final Release Pipeline
+
+The final release workflow is exposed through the same main entry point, using the
+`release` subcommand. It is designed for a fresh clone of the repository: after
+placing the raw EM-DAT and GDIS files in `data/` and configuring the required
+external credentials, the pipeline can regenerate the final derived data.
+
+By default it only prints the planned commands, so it is safe to inspect before
+launching long API or LLM runs:
+
+```bash
+python src/main.py release --list-steps
+python src/main.py release
+```
+
+To run the complete workflow from raw inputs to final outputs:
+
+```bash
+python src/main.py release --execute
+```
+
+The same entry point can also run one group or one specific step:
+
+```bash
+python src/main.py release --execute --steps base
+python src/main.py release --execute --steps geocoding
+python src/main.py release --execute --steps weather
+python src/main.py release --execute --steps reasoning
+python src/main.py release --execute --steps satellite
+python src/main.py release --execute --steps final
+python src/main.py release --execute --steps llm-location llm-nominatim-queries
+```
+
+Available groups:
+
+- `base`: merge raw EM-DAT and GDIS into `results/disasters_per_satellite.csv`.
+- `geocoding`: build the final audited coordinate CSV from EM-DAT, GADM/ADM2,
+  Llama location extraction, Nominatim geocoding, and automatic review rules.
+- `weather`: fetch Open-Meteo/NASA POWER weather data for the final geocoded
+  events.
+- `reasoning`: collect news, generate summaries, validate them, extract causal
+  chains, and normalize `type_event` labels.
+- `satellite`: prepare flood events, run the Sentinel-1/Sentinel-2 flood batch,
+  and rank the outputs.
+- `final`: assemble the single event-level CSV that summarizes all final outputs.
+
+The full pipeline keeps the detailed outputs for each processing stage and also
+produces a final event-level dataset for inspection:
+
+```text
+results/final_environmental_causal_dataset_2014_plus.csv
+results/final_environmental_causal_dataset_2014_plus_summary.csv
+results/recent_emdat_geocoding/emdat_2014_final_llm70b_review_resolved_v2.csv
+```
+
+The complete CSV has one row per event and joins the final position, weather
+summary, news coverage, validated event summary, normalized causal chain, and
+flood satellite status when available. The separate files remain the detailed
+audit/source artifacts for each stage.
+
+Heavy steps have external requirements:
+
+- `gadm-download` downloads GADM files used for administrative fallback.
+- `llm-location` and `summary` use `meta-llama/Llama-3.1-70B-Instruct` by default.
+- `causal-chain` uses `Qwen/Qwen2.5-72B-Instruct` by default.
+- `weather` calls Open-Meteo and falls back to NASA POWER when possible.
+- `llm-nominatim-geocode` calls the public Nominatim endpoint with a polite delay.
+- `news` calls the configured news sources and should be run with a polite sleep.
+- `satellite-flood` requires Copernicus/Sentinel Hub credentials.
 
 ### Satellite Event Extraction
 

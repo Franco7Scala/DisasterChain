@@ -1,16 +1,15 @@
-import pandas as pd
-import requests
 import time
 import os
+import sys
 from datetime import datetime, timedelta
 from support.constants import *
-from support.utils import merge_and_clean_datasets, load_checkpoint, save_checkpoint, calculate_weather_summaries
-from support.news_engine import NEWS_ENGINE_VERSION, get_all_news_sources
 
 def fetch_weather_data(api_parameters, disaster_id, row_index, max_retries=0):
     """
     Fetch weather data with retry/backoff for transient Open-Meteo failures.
     """
+    import requests
+
     for attempt in range(max_retries + 1):
         try:
             response = requests.get(
@@ -60,6 +59,8 @@ def fetch_nasa_power_weather_data(api_parameters, disaster_id, row_index):
     NASA POWER uses different variable names, so the response is normalized
     to the same daily_series structure used by the rest of the pipeline.
     """
+    import requests
+
     print(f"LOG [{disaster_id}]: Open-Meteo unavailable, trying NASA POWER fallback...")
 
     start = api_parameters["start_date"].replace("-", "")
@@ -118,7 +119,15 @@ def fetch_nasa_power_weather_data(api_parameters, disaster_id, row_index):
         print(f"Unexpected NASA POWER error at row {row_index} (ID: {disaster_id}): {e}")
         return None
 
-def main():
+def run_legacy_pipeline():
+    from support.news_engine import NEWS_ENGINE_VERSION, get_all_news_sources
+    from support.utils import (
+        calculate_weather_summaries,
+        load_checkpoint,
+        merge_and_clean_datasets,
+        save_checkpoint,
+    )
+
     print("--- STARTING ENVIRONMENTAL CAUSAL DATASET PIPELINE ---")
 
     # Ensure that the data directory exists before attempting to read input files
@@ -343,6 +352,20 @@ def main():
     if weather_failed_disasters:
         print(f"Weather retrieval failed for {weather_failed_disasters} events.")
     print(f"Final dataset structure compiled and updated at: {FINAL_DATASET_OUTPUT_PATH}")
+
+
+def main():
+    if len(sys.argv) > 1 and sys.argv[1] == "release":
+        from run_release_pipeline import main as run_release_main
+
+        sys.argv = [sys.argv[0], *sys.argv[2:]]
+        run_release_main()
+        return
+
+    if len(sys.argv) > 1 and sys.argv[1] == "legacy":
+        sys.argv = [sys.argv[0], *sys.argv[2:]]
+
+    run_legacy_pipeline()
 
 if __name__ == "__main__":
     main()
