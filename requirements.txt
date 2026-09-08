@@ -12,3 +12,4 @@ transformers
 accelerate
 bitsandbytes
 pycountry
+rasterio

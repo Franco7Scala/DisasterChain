@@ -1,20 +1,20 @@
 import argparse
 import csv
 import json
+import shutil
 import time
+from collections import Counter
 from datetime import datetime
 from pathlib import Path
 from typing import Dict, Iterable, List, Optional
 
 from support.constants import (
-    CLEANED_DISASTERS_OUTPUT_PATH,
     MULTIMODAL_BATCH_DEFAULT_LIMIT,
     MULTIMODAL_BATCH_SUMMARY_CSV,
     MULTIMODAL_DEFAULT_MAX_CLOUD_COVER,
     MULTIMODAL_DEFAULT_OUTPUT_RESOLUTION_M,
     MULTIMODAL_DEFAULT_S3_RESOLUTION_M,
     MULTIMODAL_SATELLITE_OUTPUT_DIR,
-    SATELLITE_BATCH_DEFAULT_MIN_START_DATE,
     SATELLITE_BATCH_DEFAULT_SLEEP_SECONDS,
     SATELLITE_DEFAULT_AOI_HALF_SIZE_KM,
     SATELLITE_DEFAULT_WINDOW_DAYS,
@@ -22,8 +22,11 @@ from support.constants import (
 from support.multimodal_satellite_engine import (
     MultimodalSatelliteConfig,
     run_multimodal_satellite_event,
+    manifest_complete,
+    manifest_matches,
+    SatelliteConfigurationError,
 )
-from support.satellite_engine import SatelliteEvent
+from support.satellite_engine import SatelliteEvent, SentinelHubRequestError, require_copernicus_credentials
 
 
 SUMMARY_FIELDS = [
@@ -46,6 +49,12 @@ SUMMARY_FIELDS = [
     "sentinel_3_slstr_missing_days",
     "land_cover_available",
     "land_cover_year",
+    "land_cover_product",
+    "land_cover_status",
+    "sentinel_2_error_days",
+    "sentinel_1_error_days",
+    "sentinel_3_slstr_error_days",
+    "manifest_status",
     "has_any_satellite_data",
     "output_file_count",
     "elapsed_seconds",
@@ -57,10 +66,10 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description=(
             "Run the general multimodal satellite extraction workflow for a "
-            "small controlled batch of disaster events."
+            "batch of disaster events of any type."
         )
     )
-    parser.add_argument("--events-csv", default=CLEANED_DISASTERS_OUTPUT_PATH)
+    parser.add_argument("--events-csv", default=str(Path(MULTIMODAL_SATELLITE_OUTPUT_DIR) / "events.csv"))
     parser.add_argument(
         "--event-id",
         action="append",
@@ -77,7 +86,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--country", help="Optional exact country filter")
     parser.add_argument(
         "--min-start-date",
-        default=SATELLITE_BATCH_DEFAULT_MIN_START_DATE,
+        default="2014-04-03",
         help="Earliest event start date to include, YYYY-MM-DD.",
     )
     parser.add_argument(
@@ -93,6 +102,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--output-dir", default=MULTIMODAL_SATELLITE_OUTPUT_DIR)
     parser.add_argument("--summary-csv", default=MULTIMODAL_BATCH_SUMMARY_CSV)
     parser.add_argument("--dry-run", action="store_true")
+    parser.add_argument("--min-free-disk-gb", type=float, default=5.0,
+                        help="Stop before the next event if free disk space falls below this reserve")
     parser.add_argument(
         "--force",
         action="store_true",
@@ -178,7 +189,7 @@ def row_to_event(row: Dict[str, str]) -> SatelliteEvent:
     if not has_required_event_fields(row):
         raise ValueError("missing event id, coordinates, or start date")
 
-    return SatelliteEvent(
+    event = SatelliteEvent(
         event_id=row["emdat_disaster_id"],
         latitude=float(row["latitude"]),
         longitude=float(row["longitude"]),
@@ -187,6 +198,12 @@ def row_to_event(row: Dict[str, str]) -> SatelliteEvent:
         disaster_type=row.get("disaster_type") or None,
         location=row.get("location") or row.get("emdat_location") or None,
     )
+    parse_iso_date(event.start_date)
+    if not (-90 < event.latitude < 90 and -180 <= event.longitude <= 180):
+        raise ValueError("coordinates outside valid bounds")
+    if event.event_id in (".", "..") or any(char in event.event_id for char in '/\\:'):
+        raise ValueError("invalid event id")
+    return event
 
 
 def select_events(args: argparse.Namespace) -> List[SatelliteEvent]:
@@ -306,6 +323,7 @@ def summary_row(
     land_cover = manifest.get("land_cover") or {}
     available_days = quality.get("available_days", {})
     missing_days = quality.get("missing_days", {})
+    error_days = quality.get("error_days", {})
 
     if manifest_path is None and manifest.get("manifest_path"):
         manifest_path = Path(manifest["manifest_path"])
@@ -333,6 +351,12 @@ def summary_row(
         "sentinel_3_slstr_missing_days": missing_days.get("sentinel_3_slstr", ""),
         "land_cover_available": land_cover.get("available", ""),
         "land_cover_year": land_cover.get("year", ""),
+        "land_cover_product": land_cover.get("product", ""),
+        "land_cover_status": land_cover.get("status", ""),
+        "sentinel_2_error_days": error_days.get("sentinel_2", ""),
+        "sentinel_1_error_days": error_days.get("sentinel_1", ""),
+        "sentinel_3_slstr_error_days": error_days.get("sentinel_3_slstr", ""),
+        "manifest_status": manifest.get("status", ""),
         "has_any_satellite_data": has_any_satellite_data(available_days),
         "output_file_count": count_output_files(manifest),
         "elapsed_seconds": round(elapsed_seconds, 2),
@@ -383,7 +407,10 @@ def print_dry_run(events: List[SatelliteEvent], args: argparse.Namespace) -> Non
         f"min_start_date={args.min_start_date!r}, "
         f"limit={limit_label!r}"
     )
-    for index, event in enumerate(events, start=1):
+    print("Selected events by type:")
+    for disaster_type, count in sorted(Counter(event.disaster_type or "unknown" for event in events).items()):
+        print(f"  {disaster_type}: {count}")
+    for index, event in enumerate(events[:10], start=1):
         print(
             f"{index}. {event.event_id} | {event.disaster_type or '-'} | "
             f"{event.country or '-'} | {event.start_date} | "
@@ -394,41 +421,54 @@ def print_dry_run(events: List[SatelliteEvent], args: argparse.Namespace) -> Non
 
 def run_batch(args: argparse.Namespace) -> None:
     events = select_events(args)
+    config = build_config(args)
+    if args.sleep_seconds < 0 or args.min_free_disk_gb < 0:
+        raise SystemExit("Sleep and free-disk reserve must be non-negative")
     if args.dry_run:
         print_dry_run(events, args)
         return
 
-    config = build_config(args)
+    require_copernicus_credentials()
     run_started_at = datetime.now().isoformat(timespec="seconds")
     print(f"Selected {len(events)} event(s). Summary: {args.summary_csv}")
+    counts = Counter()
+    Path(args.output_dir).mkdir(parents=True, exist_ok=True)
 
     for index, event in enumerate(events, start=1):
         start = time.perf_counter()
         manifest_path = manifest_path_for(args.output_dir, event)
         print(f"[{index}/{len(events)}] {event.event_id}: starting")
-
+        manifest = None
         try:
             if manifest_path.exists() and not args.force:
                 manifest = load_manifest(manifest_path)
+                if not manifest_matches(manifest, event, config):
+                    raise SatelliteConfigurationError("Existing configuration differs; choose a new output directory or --force")
+            if manifest and manifest_complete(manifest):
                 status = "skipped_existing"
-                print(f"[{index}/{len(events)}] {event.event_id}: manifest exists, skipped")
+                print(f"[{index}/{len(events)}] {event.event_id}: complete checkpoint, skipped")
             else:
+                free_gb = shutil.disk_usage(args.output_dir).free / (1024 ** 3)
+                if free_gb < args.min_free_disk_gb:
+                    raise OSError(f"Only {free_gb:.1f} GiB free; batch stopped to preserve disk space")
                 manifest = run_multimodal_satellite_event(
                     event,
                     config,
                     output_dir=args.output_dir,
+                    force=args.force,
                 )
                 manifest_path = Path(manifest["manifest_path"])
-                status = "completed"
+                status = manifest["status"]
                 quality = manifest.get("quality_summary", {})
                 print(
-                    f"[{index}/{len(events)}] {event.event_id}: completed "
+                    f"[{index}/{len(events)}] {event.event_id}: {status} "
                     f"(S2={nested_get(quality, ['available_days', 'sentinel_2'], 0)}, "
                     f"S1={nested_get(quality, ['available_days', 'sentinel_1'], 0)}, "
                     f"S3={nested_get(quality, ['available_days', 'sentinel_3_slstr'], 0)})"
                 )
 
             elapsed = time.perf_counter() - start
+            counts[status] += 1
             append_summary(
                 args.summary_csv,
                 summary_row(
@@ -441,6 +481,7 @@ def run_batch(args: argparse.Namespace) -> None:
                 ),
             )
         except Exception as exc:
+            counts["error"] += 1
             elapsed = time.perf_counter() - start
             error = str(exc)
             print(f"[{index}/{len(events)}] {event.event_id}: error: {error}")
@@ -451,18 +492,22 @@ def run_batch(args: argparse.Namespace) -> None:
                     event,
                     "error",
                     elapsed,
+                    manifest=load_manifest(manifest_path) if manifest_path.exists() else None,
                     manifest_path=manifest_path,
                     error=error,
                 ),
             )
-            if args.stop_on_error:
+            if (args.stop_on_error or isinstance(exc, (SatelliteConfigurationError, OSError))
+                    or isinstance(exc, SentinelHubRequestError) and exc.status_code in (401, 403, 429)):
                 raise SystemExit(error) from exc
 
         if index < len(events) and args.sleep_seconds > 0:
             time.sleep(args.sleep_seconds)
 
-    print("Batch completed.")
+    print("Batch finished:", dict(counts))
     print(f"Summary CSV: {args.summary_csv}")
+    if counts["partial"] or counts["error"]:
+        raise SystemExit("Some downloads failed; repeat the same command to retry incomplete records.")
 
 
 def main() -> None:

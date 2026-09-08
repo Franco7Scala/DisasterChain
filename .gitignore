@@ -10,9 +10,12 @@ __pycache__/
 data/
 results/satellite/
 results/multimodal_satellite/
+results/multimodal_satellite_2014_plus/
 results/landsat_probe/
 results/recent_emdat_geocoding/
 docs/project_log.md
+docs/laptop_handoff_project_log.md
+docs/thesis_process_summary.md
 results/news_benchmark_report.txt
 results/news_benchmark_review.xlsx
 results/news_benchmark_wrong_cases.csv

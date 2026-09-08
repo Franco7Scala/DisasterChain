@@ -88,17 +88,12 @@ DEFAULT_TYPE_SUMMARY_CSV = (
     "results/news_reasoning/event_causal_chain_type_normalization_summary_qwen72b_v8_2014_plus.csv"
 )
 DEFAULT_SATELLITE_INPUT_CSV = (
-    "results/satellite/satellite_batch_input_flood_2014_plus.csv"
+    "results/multimodal_satellite_2014_plus/events.csv"
 )
 DEFAULT_SATELLITE_SUMMARY_CSV = (
-    "results/satellite/batch_summary_massive_2014_plus_flood.csv"
+    "results/multimodal_satellite_2014_plus/batch_summary.csv"
 )
-DEFAULT_SATELLITE_RANKING_CSV = (
-    "results/satellite/ranked_events_massive_2014_plus_flood.csv"
-)
-DEFAULT_SATELLITE_S2_RANKING_CSV = (
-    "results/satellite/ranked_events_massive_2014_plus_flood_s2_change.csv"
-)
+DEFAULT_SATELLITE_RANKING_CSV = ""
 DEFAULT_FINAL_COMPLETE_CSV = "results/final_environmental_causal_dataset_2014_plus.csv"
 DEFAULT_FINAL_COMPLETE_SUMMARY_CSV = (
     "results/final_environmental_causal_dataset_2014_plus_summary.csv"
@@ -580,7 +575,7 @@ def build_steps(args: argparse.Namespace) -> List[PipelineStep]:
     steps.append(
         PipelineStep(
             name="satellite-input",
-            description="Prepare a compact flood-event CSV for the satellite batch runner.",
+            description="Prepare satellite inputs for every disaster type and audit excluded events.",
             commands=[
                 [
                     py,
@@ -602,12 +597,12 @@ def build_steps(args: argparse.Namespace) -> List[PipelineStep]:
 
     steps.append(
         PipelineStep(
-            name="satellite-flood",
-            description="Run the Sentinel-1/Sentinel-2 flood-oriented satellite batch.",
+            name="satellite-general",
+            description="Collect general Sentinel-1/2/3 and ESA WorldCover layers for all selected events.",
             commands=[
                 [
                     py,
-                    "src/fetch_satellite_batch.py",
+                    "src/fetch_multimodal_satellite_batch.py",
                     "--events-csv",
                     args.satellite_input_csv,
                     "--disaster-type",
@@ -616,8 +611,12 @@ def build_steps(args: argparse.Namespace) -> List[PipelineStep]:
                     args.start_date,
                     "--limit",
                     str(args.satellite_limit),
-                    "--image-size",
-                    str(args.satellite_image_size),
+                    "--output-dir",
+                    args.satellite_output_dir,
+                    "--output-resolution-m",
+                    str(args.satellite_resolution_m),
+                    "--s3-resolution-m",
+                    str(args.satellite_s3_resolution_m),
                     "--max-cloud-cover",
                     str(args.satellite_max_cloud_cover),
                     "--window-days",
@@ -630,39 +629,7 @@ def build_steps(args: argparse.Namespace) -> List[PipelineStep]:
             ],
             required_inputs=[args.satellite_input_csv],
             expected_outputs=[args.satellite_summary_csv],
-            note="Requires Copernicus/Sentinel Hub credentials in the environment.",
-        )
-    )
-
-    steps.append(
-        PipelineStep(
-            name="satellite-ranking",
-            description="Rank the flood satellite outputs and create the S2-change subset.",
-            commands=[
-                [
-                    py,
-                    "src/rank_satellite_events.py",
-                    "--summary-csv",
-                    args.satellite_summary_csv,
-                    "--output-csv",
-                    args.satellite_ranking_csv,
-                    "--top",
-                    str(args.ranking_top),
-                ],
-                [
-                    py,
-                    "src/rank_satellite_events.py",
-                    "--summary-csv",
-                    args.satellite_summary_csv,
-                    "--output-csv",
-                    args.satellite_s2_ranking_csv,
-                    "--require-s2-change",
-                    "--top",
-                    str(args.ranking_top),
-                ],
-            ],
-            required_inputs=[args.satellite_summary_csv],
-            expected_outputs=[args.satellite_ranking_csv, args.satellite_s2_ranking_csv],
+            note="Requires Copernicus credentials and rasterio; resumes compatible checkpoints. No disaster-specific indices.",
         )
     )
 
@@ -724,8 +691,7 @@ def expand_requested_steps(requested: Iterable[str]) -> List[str]:
             "causal-chain",
             "causal-type-normalization",
             "satellite-input",
-            "satellite-flood",
-            "satellite-ranking",
+            "satellite-general",
             "final-dataset",
         ],
         "base": ["base-merge"],
@@ -747,7 +713,7 @@ def expand_requested_steps(requested: Iterable[str]) -> List[str]:
             "causal-chain",
             "causal-type-normalization",
         ],
-        "satellite": ["satellite-input", "satellite-flood", "satellite-ranking"],
+        "satellite": ["satellite-input", "satellite-general"],
         "final": ["final-dataset"],
     }
     expanded: List[str] = []
@@ -937,14 +903,14 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--satellite-input-csv", default=DEFAULT_SATELLITE_INPUT_CSV)
     parser.add_argument("--satellite-summary-csv", default=DEFAULT_SATELLITE_SUMMARY_CSV)
     parser.add_argument("--satellite-ranking-csv", default=DEFAULT_SATELLITE_RANKING_CSV)
-    parser.add_argument("--satellite-s2-ranking-csv", default=DEFAULT_SATELLITE_S2_RANKING_CSV)
-    parser.add_argument("--satellite-disaster-type", default="Flood")
+    parser.add_argument("--satellite-output-dir", default="results/multimodal_satellite_2014_plus")
+    parser.add_argument("--satellite-disaster-type", default="", help="Optional type filter; defaults to all types, including Flood")
     parser.add_argument("--satellite-limit", type=int, default=0)
-    parser.add_argument("--satellite-image-size", type=int, default=256)
-    parser.add_argument("--satellite-max-cloud-cover", type=float, default=70.0)
-    parser.add_argument("--satellite-window-days", type=int, default=30)
+    parser.add_argument("--satellite-resolution-m", type=int, default=20)
+    parser.add_argument("--satellite-s3-resolution-m", type=int, default=1000)
+    parser.add_argument("--satellite-max-cloud-cover", type=float, default=100.0)
+    parser.add_argument("--satellite-window-days", type=int, default=10)
     parser.add_argument("--satellite-sleep-seconds", type=float, default=2.0)
-    parser.add_argument("--ranking-top", type=int, default=30)
     parser.add_argument("--final-complete-csv", default=DEFAULT_FINAL_COMPLETE_CSV)
     parser.add_argument(
         "--final-complete-summary-csv",

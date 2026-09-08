@@ -17,10 +17,8 @@ from support.constants import (
     SATELLITE_DEFAULT_TIMEOUT_SECONDS,
     SATELLITE_DEFAULT_WINDOW_DAYS,
     SENTINEL_CATALOG_SEARCH_LIMIT,
-    WORLD_COVER_LCM10_COLLECTION_TYPE,
-    WORLD_COVER_LCM10_MAX_YEAR,
-    WORLD_COVER_LCM10_MIN_YEAR,
 )
+from support.worldcover import download_worldcover
 from support.satellite_engine import (
     SatelliteEvent,
     SentinelHubClient,
@@ -29,6 +27,10 @@ from support.satellite_engine import (
     parse_catalog_datetime,
     require_copernicus_credentials,
 )
+
+
+class SatelliteConfigurationError(ValueError):
+    pass
 
 
 @dataclass
@@ -42,6 +44,35 @@ class MultimodalSatelliteConfig:
     include_png_previews: bool = True
     include_land_cover: bool = True
     include_sentinel_3: bool = True
+
+    # Rejects configurations that cannot produce valid image requests.
+    def __post_init__(self):
+        if self.window_days < 0 or self.aoi_half_size_km <= 0:
+            raise ValueError("Window must be non-negative and area size must be positive")
+        if self.output_resolution_m <= 0 or self.s3_resolution_m <= 0:
+            raise ValueError("Output resolutions must be positive")
+        if not 0 <= self.max_cloud_cover <= 100:
+            raise ValueError("Cloud cover must be between 0 and 100")
+        if 2000 * self.aoi_half_size_km / min(self.output_resolution_m, self.s3_resolution_m) > 2500:
+            raise ValueError("Requested image exceeds the 2500-pixel Process API limit")
+
+
+class DailyCatalogClient(SentinelHubClient):
+    # Fetches the full event window once per sensor, including every catalog page.
+    def __init__(self, client_id, client_secret, timeout_seconds, dates):
+        super().__init__(client_id, client_secret, timeout_seconds)
+        self.dates = dates
+        self.catalog_cache = {}
+
+    # Returns cached acquisitions for the requested day and collection.
+    def catalog_search(self, collection, bbox, from_date, to_date, limit=100):
+        key = (collection, tuple(bbox))
+        if key not in self.catalog_cache:
+            self.catalog_cache[key] = super().catalog_search(
+                collection, bbox, self.dates[0], self.dates[-1], limit, all_pages=True,
+            )
+        return [item for item in self.catalog_cache[key]
+                if from_date <= _scene_datetime(item)[:10] <= to_date]
 
 
 S2_TRUE_COLOR_TIFF_EVALSCRIPT = """
@@ -221,24 +252,6 @@ function evaluatePixel(sample) {
 )
 
 
-WORLD_COVER_LCM10_EVALSCRIPT = """
-//VERSION=3
-function setup() {
-  return {
-    input: ["LCM10", "dataMask"],
-    output: { id: "default", bands: 1, sampleType: "UINT8" }
-  };
-}
-
-function evaluatePixel(sample) {
-  if (sample.dataMask === 0) {
-    return [0];
-  }
-  return [sample.LCM10];
-}
-"""
-
-
 def analysis_dates(start_date: str, window_days: int) -> List[str]:
     start = datetime.strptime(start_date, "%Y-%m-%d")
     return [
@@ -249,6 +262,13 @@ def analysis_dates(start_date: str, window_days: int) -> List[str]:
 
 def day_time_range(day: str) -> Tuple[str, str]:
     return f"{day}T00:00:00Z", f"{day}T23:59:59Z"
+
+
+# Restricts processing to the acquisition chosen from the catalog.
+def acquisition_time_range(scene: Dict) -> Tuple[str, str]:
+    acquisition = parse_catalog_datetime(_scene_datetime(scene))
+    return tuple((acquisition + timedelta(seconds=offset)).isoformat().replace("+00:00", "Z")
+                 for offset in (-1, 1))
 
 
 def bbox_dimensions_km(bbox: List[float]) -> Tuple[float, float]:
@@ -295,6 +315,12 @@ def _sort_by_datetime(items: List[Dict]) -> List[Dict]:
     return sorted(items, key=lambda item: parse_catalog_datetime(_scene_datetime(item)))
 
 
+# Preserves zero cloud cover instead of treating it as missing metadata.
+def scene_cloud_cover(item: Dict) -> float:
+    value = item.get("properties", {}).get("eo:cloud_cover")
+    return 100.0 if value is None else float(value)
+
+
 def select_daily_s2_scene(
     client: SentinelHubClient,
     bbox: List[float],
@@ -318,7 +344,7 @@ def select_daily_s2_scene(
     return sorted(
         candidates,
         key=lambda item: (
-            float(item.get("properties", {}).get("eo:cloud_cover") or 100.0),
+            scene_cloud_cover(item),
             parse_catalog_datetime(_scene_datetime(item)),
         ),
     )[0]
@@ -362,7 +388,7 @@ def select_daily_s3_scene(
     return sorted(
         items,
         key=lambda item: (
-            float(item.get("properties", {}).get("eo:cloud_cover") or 100.0),
+            scene_cloud_cover(item),
             parse_catalog_datetime(_scene_datetime(item)),
         ),
     )[0]
@@ -434,7 +460,7 @@ def download_s2_daily_layers(
     day_dir: Path,
     config: MultimodalSatelliteConfig,
 ) -> Dict[str, str]:
-    time_from, time_to = day_time_range(scene["properties"]["datetime"][:10])
+    time_from, time_to = acquisition_time_range(scene)
     common_filter = {
         "maxCloudCoverage": config.max_cloud_cover,
         "mosaickingOrder": "leastCC",
@@ -535,7 +561,7 @@ def download_s1_daily_layers(
     day_dir: Path,
     config: MultimodalSatelliteConfig,
 ) -> Dict[str, str]:
-    time_from, time_to = day_time_range(scene["properties"]["datetime"][:10])
+    time_from, time_to = acquisition_time_range(scene)
     common_filter = {
         "resolution": "HIGH",
         "acquisitionMode": "IW",
@@ -543,7 +569,7 @@ def download_s1_daily_layers(
         "mosaickingOrder": "mostRecent",
     }
     processing = {
-        "orthorectify": "true",
+        "orthorectify": True,
         "demInstance": "COPERNICUS_30",
         "backCoeff": "GAMMA0_TERRAIN",
     }
@@ -592,7 +618,7 @@ def download_s3_daily_layers(
     day_dir: Path,
     config: MultimodalSatelliteConfig,
 ) -> Dict[str, str]:
-    time_from, time_to = day_time_range(scene["properties"]["datetime"][:10])
+    time_from, time_to = acquisition_time_range(scene)
     payload = process_payload_by_resolution(
         "sentinel-3-slstr",
         bbox,
@@ -617,11 +643,7 @@ def download_s3_daily_layers(
     }
 
 
-def land_cover_year_for_event(start_date: str) -> int:
-    year = datetime.strptime(start_date, "%Y-%m-%d").year
-    return min(max(year, WORLD_COVER_LCM10_MIN_YEAR), WORLD_COVER_LCM10_MAX_YEAR)
-
-
+# Crops an actual ESA WorldCover map and records its reference year.
 def download_land_cover(
     client: SentinelHubClient,
     event: SatelliteEvent,
@@ -629,40 +651,17 @@ def download_land_cover(
     output_root: Path,
     config: MultimodalSatelliteConfig,
 ) -> Dict:
-    year = land_cover_year_for_event(event.start_date)
-    output_path = output_root / "satellite" / "land_cover" / "worldcover_lcm10.tif"
-    time_from = f"{year}-01-01T00:00:00Z"
-    time_to = f"{year}-12-31T23:59:59Z"
-    payload = process_payload_by_resolution(
-        WORLD_COVER_LCM10_COLLECTION_TYPE,
-        bbox,
-        time_from,
-        time_to,
-        WORLD_COVER_LCM10_EVALSCRIPT,
-        config.output_resolution_m,
-        "image/tiff",
-        data_filter={"mosaickingOrder": "mostRecent"},
-        processing={"upsampling": "NEAREST", "downsampling": "NEAREST"},
+    width, height = image_dimensions_for_resolution(bbox, config.output_resolution_m)
+    return download_worldcover(
+        event.start_date, bbox, output_root / "satellite" / "land_cover" / "worldcover.tif",
+        width, height,
     )
-    try:
-        path = _write_process_output(client, payload, output_path, "image/tiff")
-    except SentinelHubRequestError as exc:
-        return {
-            "available": False,
-            "year": year,
-            "outputs": {},
-            "error": str(exc),
-        }
-    return {
-        "available": True,
-        "year": year,
-        "outputs": {"worldcover_lcm10_tif": path},
-    }
 
 
 def empty_sensor_slot(error: Optional[str] = None) -> Dict:
     slot = {
         "available": False,
+        "status": "error" if error else "pending",
         "scene": None,
         "outputs": {},
     }
@@ -677,28 +676,93 @@ def build_quality_summary(days: List[Dict]) -> Dict:
         "total_days": len(days),
         "available_days": {},
         "missing_days": {},
+        "error_days": {},
     }
     for sensor_name in sensor_names:
         available = sum(1 for day in days if day[sensor_name]["available"])
         summary["available_days"][sensor_name] = available
         summary["missing_days"][sensor_name] = len(days) - available
+        summary["error_days"][sensor_name] = sum(
+            day[sensor_name].get("status") == "error" for day in days
+        )
     return summary
+
+
+# Checks that a finished slot still has all its downloaded files.
+def slot_complete(slot: Optional[Dict]) -> bool:
+    slot = slot or {}
+    if slot.get("status") in ("no_scene", "no_data", "disabled"):
+        return True
+    outputs = slot.get("outputs", {})
+    return bool(slot.get("available") and outputs and all(
+        Path(path).is_file() and Path(path).stat().st_size > 0 for path in outputs.values()
+    ))
+
+
+# Prevents reusing acquisitions produced for another event or configuration.
+def manifest_matches(manifest: Dict, event: SatelliteEvent, config: MultimodalSatelliteConfig) -> bool:
+    return (manifest.get("schema_version") == MULTIMODAL_SCHEMA_VERSION
+            and manifest.get("event") == asdict(event) and manifest.get("config") == asdict(config))
+
+
+# Marks an event complete only after every requested day and layer is resolved.
+def manifest_complete(manifest: Dict) -> bool:
+    days = manifest.get("days", [])
+    expected = manifest.get("temporal_window", {}).get("days", 0)
+    return bool(expected and len(days) == expected and all(
+        slot_complete(day.get(sensor)) for day in days
+        for sensor in ("sentinel_2", "sentinel_1", "sentinel_3_slstr")
+    ) and slot_complete(manifest.get("land_cover")))
+
+
+# Writes a checkpoint atomically so interrupted runs can resume safely.
+def save_manifest(manifest: Dict, path: Path) -> None:
+    manifest["quality_summary"] = build_quality_summary(manifest["days"])
+    available = manifest["quality_summary"]["available_days"]
+    manifest["status"] = (
+        "completed" if any(available.values()) else "no_data"
+    ) if manifest_complete(manifest) else "partial"
+    temporary = path.with_suffix(".json.part")
+    temporary.write_text(json.dumps(manifest, indent=2), encoding="utf-8")
+    temporary.replace(path)
+
+
+# Downloads one sensor-day and distinguishes missing scenes from failed requests.
+def fetch_sensor_day(client, bbox, day, sensor, output_root, config):
+    selectors = {"sentinel_2": select_daily_s2_scene, "sentinel_1": select_daily_s1_scene,
+                 "sentinel_3_slstr": select_daily_s3_scene}
+    downloaders = {"sentinel_2": download_s2_daily_layers, "sentinel_1": download_s1_daily_layers,
+                   "sentinel_3_slstr": download_s3_daily_layers}
+    directories = {"sentinel_2": "sentinel-2", "sentinel_1": "sentinel-1",
+                   "sentinel_3_slstr": "sentinel-3-slstr"}
+    selector_args = [config.max_cloud_cover] if sensor == "sentinel_2" else []
+    scene = selectors[sensor](client, bbox, day, *selector_args)
+    if scene is None:
+        return {**empty_sensor_slot(), "status": "no_scene"}
+    outputs = downloaders[sensor](client, scene, bbox,
+                                  output_root / "satellite" / directories[sensor] / day, config)
+    return {"status": "available", "available": True, "scene": scene_record(scene), "outputs": outputs}
 
 
 def run_multimodal_satellite_event(
     event: SatelliteEvent,
     config: MultimodalSatelliteConfig,
     output_dir: Optional[str] = None,
+    force: bool = False,
 ) -> Dict:
-    client_id, client_secret = require_copernicus_credentials()
-    client = SentinelHubClient(client_id, client_secret, config.timeout_seconds)
-
+    if not event.event_id or any(char in event.event_id for char in '/\\:') or event.event_id in (".", ".."):
+        raise ValueError("Invalid event id")
+    if not (-90 < event.latitude < 90 and -180 <= event.longitude <= 180):
+        raise ValueError("Invalid latitude or longitude")
     bbox = event_bbox(event.latitude, event.longitude, config.aoi_half_size_km)
-    output_root = Path(output_dir or MULTIMODAL_SATELLITE_OUTPUT_DIR) / event.event_id
+    if bbox[0] < -180 or bbox[2] > 180 or bbox[1] < -90 or bbox[3] > 90:
+        raise ValueError("Area crosses the antimeridian or a pole; split-area processing is required")
+    output_root = (Path(output_dir or MULTIMODAL_SATELLITE_OUTPUT_DIR) / event.event_id).resolve()
     output_root.mkdir(parents=True, exist_ok=True)
-
+    manifest_path = output_root / "manifest.json"
+    dates = analysis_dates(event.start_date, config.window_days)
     daily_records = []
-    for day in analysis_dates(event.start_date, config.window_days):
+    for day in dates:
         relative_day = (
             datetime.strptime(day, "%Y-%m-%d")
             - datetime.strptime(event.start_date, "%Y-%m-%d")
@@ -711,71 +775,9 @@ def run_multimodal_satellite_event(
             "sentinel_3_slstr": empty_sensor_slot(),
         }
 
-        try:
-            s2_scene = select_daily_s2_scene(
-                client,
-                bbox,
-                day,
-                config.max_cloud_cover,
-            )
-            if s2_scene:
-                s2_outputs = download_s2_daily_layers(
-                    client,
-                    s2_scene,
-                    bbox,
-                    output_root / "satellite" / "sentinel-2" / day,
-                    config,
-                )
-                day_record["sentinel_2"] = {
-                    "available": True,
-                    "scene": scene_record(s2_scene),
-                    "outputs": s2_outputs,
-                }
-        except SentinelHubRequestError as exc:
-            day_record["sentinel_2"] = empty_sensor_slot(str(exc))
-
-        try:
-            s1_scene = select_daily_s1_scene(client, bbox, day)
-            if s1_scene:
-                s1_outputs = download_s1_daily_layers(
-                    client,
-                    s1_scene,
-                    bbox,
-                    output_root / "satellite" / "sentinel-1" / day,
-                    config,
-                )
-                day_record["sentinel_1"] = {
-                    "available": True,
-                    "scene": scene_record(s1_scene),
-                    "outputs": s1_outputs,
-                }
-        except SentinelHubRequestError as exc:
-            day_record["sentinel_1"] = empty_sensor_slot(str(exc))
-
-        if config.include_sentinel_3:
-            try:
-                s3_scene = select_daily_s3_scene(client, bbox, day)
-                if s3_scene:
-                    s3_outputs = download_s3_daily_layers(
-                        client,
-                        s3_scene,
-                        bbox,
-                        output_root / "satellite" / "sentinel-3-slstr" / day,
-                        config,
-                    )
-                    day_record["sentinel_3_slstr"] = {
-                        "available": True,
-                        "scene": scene_record(s3_scene),
-                        "outputs": s3_outputs,
-                    }
-            except SentinelHubRequestError as exc:
-                day_record["sentinel_3_slstr"] = empty_sensor_slot(str(exc))
-
+        if not config.include_sentinel_3:
+            day_record["sentinel_3_slstr"]["status"] = "disabled"
         daily_records.append(day_record)
-
-    land_cover = None
-    if config.include_land_cover:
-        land_cover = download_land_cover(client, event, bbox, output_root, config)
 
     manifest = {
         "schema_version": MULTIMODAL_SCHEMA_VERSION,
@@ -808,7 +810,7 @@ def run_multimodal_satellite_event(
             "sentinel_1_bands": ["VV", "VH"],
         },
         "days": daily_records,
-        "land_cover": land_cover,
+        "land_cover": {**empty_sensor_slot(), "status": "pending" if config.include_land_cover else "disabled"},
         "quality_summary": build_quality_summary(daily_records),
         "notes": {
             "base_layer": (
@@ -819,9 +821,42 @@ def run_multimodal_satellite_event(
                 "Sentinel-3 SLSTR thermal bands are brightness-temperature source "
                 "data, not a downstream LST product."
             ),
+            "aoi": "Fixed box around the event coordinates, not the full disaster footprint.",
+            "availability": "Available means downloaded, not cloud-free or evidence of disaster damage.",
         },
     }
-    manifest_path = output_root / "manifest.json"
-    manifest_path.write_text(json.dumps(manifest, indent=2), encoding="utf-8")
+    if manifest_path.exists() and not force:
+        previous = json.loads(manifest_path.read_text(encoding="utf-8"))
+        if not manifest_matches(previous, event, config):
+            raise SatelliteConfigurationError("Existing manifest has a different configuration; use a new output directory or --force")
+        manifest = previous
     manifest["manifest_path"] = str(manifest_path)
+    if manifest_complete(manifest):
+        return manifest
+    client_id, client_secret = require_copernicus_credentials()
+    client = DailyCatalogClient(client_id, client_secret, config.timeout_seconds, dates)
+    save_manifest(manifest, manifest_path)
+    try:
+        for day_record in manifest["days"]:
+            day = day_record["date"]
+            for sensor in ("sentinel_2", "sentinel_1", "sentinel_3_slstr"):
+                if slot_complete(day_record[sensor]):
+                    continue
+                try:
+                    day_record[sensor] = fetch_sensor_day(client, bbox, day, sensor, output_root, config)
+                except SentinelHubRequestError as exc:
+                    day_record[sensor] = empty_sensor_slot(str(exc))
+                    if exc.status_code in (401, 403, 429):
+                        raise
+                finally:
+                    save_manifest(manifest, manifest_path)
+            print(f"  {event.event_id} {day}: " + ", ".join(
+                f"{sensor}={day_record[sensor]['status']}"
+                for sensor in ("sentinel_2", "sentinel_1", "sentinel_3_slstr")
+            ), flush=True)
+        if not slot_complete(manifest["land_cover"]):
+            manifest["land_cover"] = download_land_cover(client, event, bbox, output_root, config)
+        save_manifest(manifest, manifest_path)
+    finally:
+        client.session.close()
     return manifest

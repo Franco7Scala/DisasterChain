@@ -68,8 +68,8 @@ Available groups:
   events.
 - `reasoning`: collect news, generate summaries, validate them, extract causal
   chains, and normalize `type_event` labels.
-- `satellite`: prepare flood events, run the Sentinel-1/Sentinel-2 flood batch,
-  and rank the outputs.
+- `satellite`: prepare all event types (including Flood) and collect the general
+  Sentinel-1/2/3 and ESA WorldCover layers.
 - `final`: assemble the single event-level CSV that summarizes all final outputs.
 
 The full pipeline keeps the detailed outputs for each processing stage and also
@@ -83,7 +83,7 @@ results/recent_emdat_geocoding/emdat_2014_final_llm70b_review_resolved_v2.csv
 
 The complete CSV has one row per event and joins the final position, weather
 summary, news coverage, validated event summary, normalized causal chain, and
-flood satellite status when available. The separate files remain the detailed
+general satellite availability and manifest paths when available. The separate files remain the detailed
 audit/source artifacts for each stage.
 
 Heavy steps have external requirements:
@@ -94,7 +94,119 @@ Heavy steps have external requirements:
 - `weather` calls Open-Meteo and falls back to NASA POWER when possible.
 - `llm-nominatim-geocode` calls the public Nominatim endpoint with a polite delay.
 - `news` calls the configured news sources and should be run with a polite sleep.
-- `satellite-flood` requires Copernicus/Sentinel Hub credentials.
+- `satellite-general` requires Copernicus/Sentinel Hub credentials and `rasterio`.
+
+### General Satellite Batch
+
+The release workflow does not filter by disaster type unless
+`--satellite-disaster-type` is explicitly supplied. Events need an exact start
+date and valid coordinates; dates are not invented for incomplete records.
+The preparation step writes an input table, a row-level exclusion audit, and
+counts by disaster type and selection reason.
+
+The default area is a fixed approximately 20 km by 20 km box around each event's
+coordinates, not the full disaster footprint or an administrative bounding box.
+The temporal window is D-10 through D+10, including the event day (21 days).
+Up to one acquisition per sensor per day is selected when available:
+
+- Sentinel-2: RGB and B12/B08/B04 false-color GeoTIFFs, a ten-band raw GeoTIFF
+  (B02, B03, B04, B05, B06, B07, B08, B8A, B11, B12), plus PNG previews;
+  bands are resampled to an approximately 20 m output grid.
+- Sentinel-1: VV/VH GeoTIFF and PNG preview, using IW dual-polarization data.
+- Sentinel-3 SLSTR: S7, S8, S9, F1, F2 brightness temperatures in kelvin at
+  approximately 1 km, **not a derived Land Surface Temperature product**.
+- ESA WorldCover: one categorical GeoTIFF per event, cropped from public COGs
+  using nearest-neighbor resampling, with reference year and source URLs.
+  Available reference maps are 2020 (v100) and 2021 (v200); the nearer reference
+  is used even for other event years and the mismatch is explicitly recorded.
+  This is not a contemporaneous land-cover observation for every event.
+
+No MNDWI, NDVI, NBR or other disaster-specific indices are generated. Missing
+acquisitions are expected, particularly before a sensor's archive begins.
+Cloud cover is scene-level metadata; a downloaded image is not necessarily
+cloud-free or evidence of damage. Polar and antimeridian-crossing areas require
+split-area handling and are reported as errors, never silently shifted.
+
+Outputs are separate from the historical Flood batch:
+
+```text
+results/multimodal_satellite_2014_plus/events.csv
+results/multimodal_satellite_2014_plus/events_selection_audit.csv
+results/multimodal_satellite_2014_plus/events_selection_summary.csv
+results/multimodal_satellite_2014_plus/batch_summary.csv
+results/multimodal_satellite_2014_plus/<event_id>/manifest.json
+results/multimodal_satellite_2014_plus/<event_id>/satellite/<sensor>/<date>/...
+```
+
+The manifest records configuration, area, dates, chosen scenes, cloud cover,
+files, and per-sensor errors. Each finished sensor-day is checkpointed atomically.
+Restarting the same command reuses compatible completed work and retries failed
+or missing downloads. A configuration change requires a new output directory or
+an explicit `--force` on the standalone batch script. Run only one satellite
+batch against a given output directory at a time.
+
+The batch summary records each attempt, so repeated runs may add rows for the
+same event; the final dataset keeps the latest record per event. `completed`
+means all requested checks finished and some sensor imagery was downloaded;
+`no_data` means the checks finished without sensor imagery; `partial`/`error`
+need a retry or intervention. `skipped_existing` means a finished compatible
+checkpoint was reused; `manifest_status` preserves its underlying outcome.
+Available/missing/error-day counts are distinct, and `has_any_satellite_data`
+does not count WorldCover alone as event imagery.
+
+Rate-limit and transient server errors use bounded retries. Authentication,
+permission or persistent rate-limit failures stop the batch instead of failing
+thousands of subsequent events. A free-disk reserve (5 GiB by default) is checked
+before each new event; it is not a guarantee that the full batch will fit.
+Raw ten-band S2 output alone is about 40 MB per 1000x1000 acquisition before
+compression, so check storage and account quotas before the massive run.
+
+For the existing cluster checkout, after pushing local code changes:
+
+```bash
+cd /home/jovyan/users/saverio_polito/Project/EnvironmentCausalDataset
+git status --short
+git pull --ff-only
+source /home/jovyan/users/saverio_polito/venvs/tirocinio/bin/activate
+python -m pip install rasterio
+source ~/.copernicus_env
+df -h .
+python src/main.py release --execute --steps satellite-input
+python src/fetch_multimodal_satellite_batch.py --limit 0 --dry-run
+```
+
+Stop if the pull fails or the preparation selects no events. Before scaling,
+run a real smoke test (the first three eligible events, reusable by the full run):
+
+```bash
+python -u src/fetch_multimodal_satellite_batch.py --limit 3 --sleep-seconds 2
+```
+
+Inspect its summary and a few TIFF/PNG files. If it finishes without unresolved
+errors and storage/quotas permit the run, launch the full satellite group and
+the final dataset assembly, without rerunning LLM or news stages:
+
+```bash
+nohup python -u src/main.py release --execute --steps satellite final \
+  > results/multimodal_satellite_2014_plus/batch_massive.log 2>&1 &
+echo $!
+tail -f results/multimodal_satellite_2014_plus/batch_massive.log
+```
+
+`Ctrl+C` stops `tail`, not the background batch. Do not start a second batch while
+one is active. If a run stops with incomplete downloads, resolve the reported
+cause and repeat the same command. The final assembly runs only after a successful
+satellite stage; an explicit `--steps final` can also assemble a partial snapshot.
+
+The older `fetch_satellite_batch.py` and `rank_satellite_events.py` remain
+available as standalone, Flood-specific tools; their existing files are untouched.
+They are no longer part of the release `all` or `satellite` groups.
+
+Offline regression tests (no account or satellite downloads):
+
+```bash
+python -m unittest discover -s tests -v
+```
 
 ### Satellite Event Extraction
 
@@ -143,7 +255,7 @@ python src/fetch_multimodal_satellite_event.py --event-id 2018-0040-BRA --dry-ru
 python src/fetch_multimodal_satellite_event.py --event-id 2018-0040-BRA
 ```
 
-Outputs are written to `results/multimodal_satellite/<event-id>/` and include a
+Outputs are written to `results/multimodal_satellite_2014_plus/<event-id>/` and include a
 daily manifest for Sentinel-2, Sentinel-1, Sentinel-3 SLSTR, and land cover when
 available. See `docs/multimodal_satellite_schema.md` for the target structure.
 

@@ -24,11 +24,9 @@ DEFAULT_CAUSAL_CSV = (
     "results/news_reasoning/event_causal_chains_qwen72b_v8_2014_plus_type_normalized.csv"
 )
 DEFAULT_SATELLITE_SUMMARY_CSV = (
-    "results/satellite/batch_summary_massive_2014_plus_flood.csv"
+    "results/multimodal_satellite_2014_plus/batch_summary.csv"
 )
-DEFAULT_SATELLITE_RANKING_CSV = (
-    "results/satellite/ranked_events_massive_2014_plus_flood.csv"
-)
+DEFAULT_SATELLITE_RANKING_CSV = ""
 DEFAULT_OUTPUT_CSV = "results/final_environmental_causal_dataset_2014_plus.csv"
 DEFAULT_OUTPUT_SUMMARY_CSV = "results/final_environmental_causal_dataset_2014_plus_summary.csv"
 EVENT_ID_COLUMNS = ("event_id", "disaster_id", "emdat_disaster_id", "DisNo.")
@@ -68,7 +66,7 @@ def first_column(columns: Iterable[str], names: Iterable[str]) -> Optional[str]:
 
 # Reads a CSV if present, otherwise returns an empty frame with a warning.
 def read_csv(path: Path, *, label: str, required: bool = False) -> pd.DataFrame:
-    if not path.exists():
+    if not path.is_file():
         if required:
             raise SystemExit(f"Required {label} not found: {path}")
         print(f"Warning: optional {label} not found, skipping it: {path}")
@@ -184,6 +182,8 @@ def build_summary(master: pd.DataFrame) -> pd.DataFrame:
     weather_status = master.get("weather_retrieval_status", pd.Series([""] * total, index=master.index)).fillna("")
     status = master.get("summary_validation_status", pd.Series([""] * total)).fillna("")
     satellite_status = master.get("satellite_status", pd.Series([""] * total)).fillna("")
+    manifest_status = master.get("satellite_manifest_status", satellite_status).fillna("")
+    effective_satellite_status = manifest_status.where(manifest_status.ne(""), satellite_status)
 
     rows = [
         metric_row("total_events", total, total),
@@ -194,9 +194,15 @@ def build_summary(master: pd.DataFrame) -> pd.DataFrame:
         metric_row("accepted_event_summaries", int(status.eq("accepted").sum()), total),
         metric_row("events_with_non_empty_causal_chain", int((chain_length > 0).sum()), total),
         metric_row("events_with_satellite_record", int(satellite_status.ne("").sum()), total),
+        metric_row("events_with_satellite_images", int(master.get(
+            "satellite_has_any_satellite_data", pd.Series(False, index=master.index)
+        ).astype(str).str.lower().eq("true").sum()), total),
+        metric_row("satellite_partial_records", int(satellite_status.eq("partial").sum()), total),
+        metric_row("satellite_error_records", int(satellite_status.eq("error").sum()), total),
+        metric_row("satellite_no_data_records", int(effective_satellite_status.eq("no_data").sum()), total),
         metric_row(
             "satellite_completed_or_existing",
-            int(satellite_status.isin(["completed", "skipped_existing"]).sum()),
+            int(effective_satellite_status.isin(["completed", "skipped_existing"]).sum()),
             total,
         ),
     ]
@@ -341,10 +347,18 @@ def assemble_final_dataset(args: argparse.Namespace) -> Tuple[pd.DataFrame, pd.D
     master = left_join(master, causal)
 
     satellite = read_csv(Path(args.satellite_summary_csv), label="satellite summary CSV")
+    general_fields = [
+        "manifest_status", "total_days", "sentinel_2_available_days", "sentinel_1_available_days",
+        "sentinel_3_slstr_available_days", "sentinel_2_missing_days", "sentinel_1_missing_days",
+        "sentinel_3_slstr_missing_days", "sentinel_2_error_days", "sentinel_1_error_days",
+        "sentinel_3_slstr_error_days", "land_cover_available", "land_cover_year", "land_cover_product",
+        "land_cover_status", "has_any_satellite_data", "output_file_count",
+    ]
     satellite = compact_source_frame(
         satellite,
         label="satellite summary CSV",
         keep_columns=[
+            *general_fields,
             "run_started_at",
             "status",
             "manifest_path",
@@ -365,6 +379,7 @@ def assemble_final_dataset(args: argparse.Namespace) -> Tuple[pd.DataFrame, pd.D
             "error",
         ],
         rename_map={
+            **{field: f"satellite_{field}" for field in general_fields},
             "run_started_at": "satellite_run_started_at",
             "status": "satellite_status",
             "manifest_path": "satellite_manifest_path",
@@ -387,7 +402,8 @@ def assemble_final_dataset(args: argparse.Namespace) -> Tuple[pd.DataFrame, pd.D
     )
     master = left_join(master, satellite)
 
-    ranking = read_csv(Path(args.satellite_ranking_csv), label="satellite ranking CSV")
+    ranking = (read_csv(Path(args.satellite_ranking_csv), label="satellite ranking CSV")
+               if args.satellite_ranking_csv else pd.DataFrame())
     ranking = compact_source_frame(
         ranking,
         label="satellite ranking CSV",
@@ -455,7 +471,7 @@ def main() -> None:
     print("News progress CSV:", args.news_progress_csv)
     print("Validated summaries CSV:", args.summary_csv)
     print("Normalized causal chains CSV:", args.causal_csv)
-    print("Satellite flood summary CSV:", args.satellite_summary_csv)
+    print("General satellite summary CSV:", args.satellite_summary_csv)
     print("Satellite ranking CSV:", args.satellite_ranking_csv)
 
 

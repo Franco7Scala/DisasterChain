@@ -10,7 +10,7 @@ import pandas as pd
 DEFAULT_INPUT_CSV = Path(
     "results/recent_emdat_geocoding/emdat_2014_final_llm70b_review_resolved_v2.csv"
 )
-DEFAULT_OUTPUT_CSV = Path("results/satellite/satellite_batch_input_flood_2014_plus.csv")
+DEFAULT_OUTPUT_CSV = Path("results/multimodal_satellite_2014_plus/events.csv")
 
 
 # Returns the first column available in the input file.
@@ -54,7 +54,7 @@ def start_dates_from_frame(frame: pd.DataFrame) -> pd.Series:
 # Finds all columns needed by the satellite batch runner.
 def required_columns(frame: pd.DataFrame) -> Mapping[str, Optional[str]]:
     return {
-        "event_id": first_column(frame.columns, ("emdat_disaster_id", "DisNo.", "disaster_id")),
+        "event_id": first_column(frame.columns, ("emdat_disaster_id", "DisNo.", "disaster_id", "event_id")),
         "country": first_column(frame.columns, ("country", "Country")),
         "location": first_column(frame.columns, ("location", "Location", "emdat_location")),
         "disaster_type": first_column(frame.columns, ("disaster_type", "Disaster Type")),
@@ -64,13 +64,13 @@ def required_columns(frame: pd.DataFrame) -> Mapping[str, Optional[str]]:
     }
 
 
-# Converts the final geocoding CSV into the compact schema used by satellite scripts.
-def build_satellite_input(
+# Converts event fields and records why a row cannot enter the satellite batch.
+def satellite_input_with_audit(
     frame: pd.DataFrame,
     *,
     disaster_type: str,
     min_start_date: str,
-) -> pd.DataFrame:
+) -> tuple[pd.DataFrame, pd.DataFrame]:
     columns = required_columns(frame)
     required = ("event_id", "country", "disaster_type", "latitude", "longitude")
     missing = [name for name in required if columns[name] is None]
@@ -96,28 +96,32 @@ def build_satellite_input(
     if columns["position_source"]:
         output["position_source"] = frame[columns["position_source"]].map(clean_value)
 
-    output = output.dropna(
-        subset=[
-            "emdat_disaster_id",
-            "country",
-            "start_date",
-            "disaster_type",
-            "latitude",
-            "longitude",
-        ]
-    )
+    ids = output["emdat_disaster_id"]
+    if ids[ids.ne("")].duplicated().any():
+        raise SystemExit("Duplicate event ids in input; resolve them before starting the batch")
+    reason = pd.Series("selected", index=output.index)
+    checks = [
+        (ids.eq("") | ids.str.contains(r"[/\\\\:]") | ids.isin([".", ".."]), "invalid_event_id"),
+        (output["disaster_type"].eq(""), "missing_disaster_type"),
+        (dates.isna(), "missing_or_invalid_date"),
+        (output[["latitude", "longitude"]].isna().any(axis=1), "missing_coordinates"),
+        (~output["latitude"].between(-90, 90, inclusive="neither")
+         | ~output["longitude"].between(-180, 180), "invalid_coordinates"),
+    ]
     if disaster_type:
-        output = output[
-            output["disaster_type"].str.casefold().eq(disaster_type.casefold())
-        ]
+        checks.append((~output["disaster_type"].str.casefold().eq(disaster_type.casefold()), "type_filter"))
     if min_start_date:
-        output = output[
-            pd.to_datetime(output["start_date"], errors="coerce").ge(
-                pd.Timestamp(min_start_date)
-            )
-        ]
+        checks.append((dates.lt(pd.Timestamp(min_start_date)), "before_start_date"))
+    for mask, label in checks:
+        reason.loc[reason.eq("selected") & mask] = label
+    audit = output[["emdat_disaster_id", "disaster_type", "start_date"]].copy()
+    audit["selection_status"] = reason
+    return output.loc[reason.eq("selected")].reset_index(drop=True), audit
 
-    return output.reset_index(drop=True)
+
+# Returns only rows with usable dates and coordinates, without restricting the disaster type.
+def build_satellite_input(frame: pd.DataFrame, *, disaster_type: str = "", min_start_date: str = "2014-04-03") -> pd.DataFrame:
+    return satellite_input_with_audit(frame, disaster_type=disaster_type, min_start_date=min_start_date)[0]
 
 
 # Defines the command-line options for preparing satellite batch input.
@@ -127,7 +131,7 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--input-csv", default=str(DEFAULT_INPUT_CSV))
     parser.add_argument("--output-csv", default=str(DEFAULT_OUTPUT_CSV))
-    parser.add_argument("--disaster-type", default="Flood")
+    parser.add_argument("--disaster-type", default="", help="Optional type filter; defaults to all types")
     parser.add_argument("--min-start-date", default="2014-04-03")
     return parser.parse_args()
 
@@ -141,19 +145,27 @@ def main() -> None:
         raise SystemExit(f"Input CSV not found: {input_csv}")
 
     frame = pd.read_csv(input_csv, low_memory=False)
-    output = build_satellite_input(
+    output, audit = satellite_input_with_audit(
         frame,
         disaster_type=args.disaster_type,
         min_start_date=args.min_start_date,
     )
     output_csv.parent.mkdir(parents=True, exist_ok=True)
     output.to_csv(output_csv, index=False)
+    audit_csv = output_csv.with_name(output_csv.stem + "_selection_audit.csv")
+    summary_csv = output_csv.with_name(output_csv.stem + "_selection_summary.csv")
+    audit.to_csv(audit_csv, index=False)
+    selection_summary = audit.groupby(["disaster_type", "selection_status"], dropna=False).size().reset_index(name="count")
+    selection_summary.to_csv(summary_csv, index=False)
 
     print("Input rows:", len(frame))
     print("Satellite rows:", len(output))
     print("Disaster type:", args.disaster_type or "all")
     print("Min start date:", args.min_start_date or "none")
     print("Output CSV:", output_csv)
+    print("Selection audit CSV:", audit_csv)
+    print("Selection summary CSV:", summary_csv)
+    print(selection_summary.to_string(index=False))
     if len(output):
         print()
         print(output.head(10).to_string(index=False))

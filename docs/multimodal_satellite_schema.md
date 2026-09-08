@@ -19,7 +19,7 @@ severity.
 Each event should be saved under a standard root:
 
 ```text
-results/multimodal_satellite/<event_id>/
+results/multimodal_satellite_2014_plus/<event_id>/
   manifest.json
   satellite/
     sentinel-2/
@@ -37,7 +37,7 @@ results/multimodal_satellite/<event_id>/
       YYYY-MM-DD/
         thermal_bands.tif
     land_cover/
-      worldcover_lcm10.tif
+      worldcover.tif
 ```
 
 When a scene is not available for a given day and sensor, no data file is written
@@ -64,9 +64,9 @@ Raw bands saved in `raw_bands.tif`:
 B02, B03, B04, B05, B06, B07, B08, B8A, B11, B12
 ```
 
-All Sentinel-2 outputs are requested on a 20 m grid. Bands with native 10 m
-resolution are downsampled; bands with native 20 m resolution are kept at their
-natural scale.
+All Sentinel-2 outputs use an approximately 20 m grid in EPSG:4326, calculated
+from the area dimensions. Bands are resampled with bilinear interpolation;
+the output is not a copy of the original native sensor grid.
 
 ## Sentinel-1 GRD
 
@@ -115,21 +115,23 @@ specific LST/burn/drought product can be derived later if needed.
 
 ## Land Cover / Land Use
 
-Collection:
-
-```text
-byoc-828f6b20-8ffd-48f8-a1da-fefd271456db
-```
+Product: ESA WorldCover, public three-degree COG tiles in EPSG:4326.
+Reference maps: 2020 (v100) for events up to 2020, and 2021 (v200) thereafter.
+The earlier BYOC LCM10 collection was CLMS, not ESA WorldCover, and is not used.
 
 File:
 
 ```text
-satellite/land_cover/worldcover_lcm10.tif
+satellite/land_cover/worldcover.tif
 ```
 
 The land-cover layer is saved once per event/AOI, not once per day. It is a
 context layer and should be documented as such, especially for events before the
 available WorldCover years.
+The crop uses nearest-neighbor resampling and records product, reference year,
+version, source URLs, valid-pixel percentage, CC-BY-4.0 license, and whether the
+reference year differs from the event year. Zero is nodata, not a land-cover class.
+Source: [ESA WorldCover data access](https://esa-worldcover.org/en/data-access).
 
 ## Manifest
 
@@ -144,6 +146,18 @@ available WorldCover years.
 - output file paths;
 - cloud-cover metadata where available;
 - quality summary counts per sensor.
+
+Schema version: `multimodal-satellite-v2`. Sensor slots distinguish `pending`,
+`available`, `no_scene`, `error`, and `disabled`; land cover also uses `no_data`.
+The file is checkpointed after every sensor-day. Existing compatible slots are
+reused only when their output files still exist and have nonzero size.
+Missing-day counts include all unavailable days; error-day counts distinguish
+request failures from the absence of an acquisition.
+
+The batch summary includes all disaster types, not just Flood. Its latest row
+per event is joined into the final complete dataset with a `satellite_` prefix.
+`has_any_satellite_data` counts sensor images, not the static land-cover layer;
+availability is not a validation of cloud-free coverage or visible disaster impact.
 
 ## Later Layers
 

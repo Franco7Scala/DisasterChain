@@ -180,7 +180,7 @@ def main() -> None:
     except RuntimeError as exc:
         raise SystemExit(str(exc)) from exc
 
-    print("Multimodal satellite extraction completed.")
+    print(f"Multimodal satellite extraction: {manifest['status']}.")
     print(f"Manifest: {manifest['manifest_path']}")
     quality = manifest["quality_summary"]
     for sensor_name, available_days in quality["available_days"].items():

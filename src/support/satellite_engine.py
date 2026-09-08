@@ -2,6 +2,7 @@ import json
 import math
 import os
 import re
+import time
 from dataclasses import asdict, dataclass
 from datetime import datetime, timedelta
 from io import BytesIO
@@ -46,7 +47,9 @@ ISO_FRACTION_RE = re.compile(r"(\.\d{1,6})(?=([+-]\d{2}:\d{2}|$))")
 
 
 class SentinelHubRequestError(RuntimeError):
-    pass
+    def __init__(self, message: str, status_code: Optional[int] = None):
+        super().__init__(message)
+        self.status_code = status_code
 
 
 @dataclass
@@ -172,7 +175,7 @@ class SentinelHubClient:
             raise SentinelHubRequestError(
                 f"Token request failed with HTTP {response.status_code} "
                 f"{response.reason} for auth endpoint {self.auth_url}. "
-                f"Response body: {body or '<empty>'}"
+                f"Response body: {body or '<empty>'}", response.status_code
             ) from exc
         self._access_token = response.json()["access_token"]
         return self._access_token
@@ -194,8 +197,39 @@ class SentinelHubClient:
             body = body[:SENTINEL_API_ERROR_BODY_LIMIT] + "..."
         raise SentinelHubRequestError(
             f"{context} failed with HTTP {response.status_code} "
-            f"{response.reason}. Response body: {body or '<empty>'}"
+            f"{response.reason}. Response body: {body or '<empty>'}", response.status_code
         )
+
+    # Retries transient failures and renews an expired access token once.
+    def _post(self, url: str, payload: Dict, accept: str, context: str):
+        renewed = False
+        for attempt in range(5):
+            try:
+                response = self.session.post(
+                    url, json=payload, headers=self._headers(accept),
+                    timeout=self.timeout_seconds,
+                )
+            except requests.RequestException as exc:
+                if attempt == 4:
+                    raise SentinelHubRequestError(f"{context}: {exc}") from exc
+                time.sleep(2 ** attempt)
+                continue
+            if response.status_code == 401 and not renewed and attempt < 4:
+                self._access_token = None
+                renewed = True
+                continue
+            if response.status_code in {429, 500, 502, 503, 504} and attempt < 4:
+                try:
+                    # Sentinel Hub specifies Retry-After in milliseconds.
+                    delay = max(2 ** attempt, float(response.headers.get("Retry-After", 0)) / 1000)
+                except ValueError:
+                    delay = 2 ** attempt
+                if delay > 300:
+                    self._raise_api_error(response, context)
+                time.sleep(delay)
+                continue
+            self._raise_api_error(response, context)
+            return response
 
     def catalog_search(
         self,
@@ -204,6 +238,7 @@ class SentinelHubClient:
         from_date: str,
         to_date: str,
         limit: int = 20,
+        all_pages: bool = False,
     ) -> List[Dict]:
         payload = {
             "bbox": bbox,
@@ -220,37 +255,36 @@ class SentinelHubClient:
                     "properties.landsat:collection_category",
                     "properties.s1:polarization",
                     "properties.sar:instrument_mode",
+                    "properties.sat:orbit_state",
                 ]
             },
         }
 
-        response = self.session.post(
-            self.catalog_search_url,
-            json=payload,
-            headers=self._headers(accept="application/geo+json, application/json"),
-            timeout=self.timeout_seconds,
-        )
-        self._raise_api_error(response, f"Catalog search for {collection}")
-        return response.json().get("features", [])
+        features = []
+        seen_tokens = set()
+        while True:
+            response = self._post(
+                self.catalog_search_url, payload, "application/geo+json, application/json",
+                f"Catalog search for {collection}",
+            )
+            page = response.json()
+            features.extend(page.get("features", []))
+            token = page.get("context", {}).get("next")
+            if not all_pages or token is None:
+                return features
+            if str(token) in seen_tokens:
+                raise SentinelHubRequestError("Catalog returned a repeated pagination token")
+            seen_tokens.add(str(token))
+            payload["next"] = token
 
     def process_image(self, payload: Dict, output_path: Path, accept: str) -> None:
-        response = self.session.post(
-            self.process_url,
-            json=payload,
-            headers=self._headers(accept=accept),
-            timeout=self.timeout_seconds,
-        )
-        self._raise_api_error(response, f"Process request for {output_path.name}")
-        output_path.write_bytes(response.content)
+        content = self.process_bytes(payload, accept, f"Process request for {output_path.name}")
+        temporary = output_path.with_suffix(output_path.suffix + ".part")
+        temporary.write_bytes(content)
+        temporary.replace(output_path)
 
     def process_bytes(self, payload: Dict, accept: str, context: str) -> bytes:
-        response = self.session.post(
-            self.process_url,
-            json=payload,
-            headers=self._headers(accept=accept),
-            timeout=self.timeout_seconds,
-        )
-        self._raise_api_error(response, context)
+        response = self._post(self.process_url, payload, accept, context)
         return response.content
 
 
