@@ -13,6 +13,39 @@ severity.
 - Sentinel-2 common resolution: 20 m.
 - Sentinel-3 source: Sentinel-3 SLSTR, not a pre-computed downstream LST product.
 - Disaster-specific indices: postponed to a later processing layer.
+- Event selection: valid non-empty causal chains and usable coordinates by default;
+  `--satellite-all-events true` in the release runner allows all geocoded events.
+
+## Batch Selection
+
+The release option `--satellite-all-events` accepts explicit `true` or `false`
+and defaults to `false`. Preparation and the standalone batch expose the same
+choice as `--all-events`. Both read the normalized causal CSV in restricted mode
+and match event identifiers, not row order. A custom source can be selected with
+`--normalized-causal-csv` in the release runner or `--causal-csv` in either script.
+
+Eligibility requires a non-empty JSON chain with numbered steps containing
+`type_event`, `description` and `supporting_quote`, and a status of `parsed`,
+`parsed_with_dropped_items` or `parsed_with_dropped_unsupported_quotes`. Steps
+retained after validation still qualify, even if other steps were dropped.
+This does not rerun evidence validation or imply independent scientific validation.
+Missing, empty or malformed chains do not qualify. Missing source files or
+ambiguous schemas/identifiers stop the run instead of enabling all events.
+
+The selection audit keeps one main exclusion reason per input event, including
+`no_valid_causal_chain`, along with `causal_chain_status`, `satellite_all_events`
+and `causal_chain_source_csv`. Coordinate/date failures take precedence over
+causal exclusions. The true mode does not read the causal file and records
+`causal_chain_status=not_checked`.
+
+Selection is separate from the per-event acquisition configuration: changing
+scope preserves compatible manifests and does not invalidate downloaded TIFFs.
+Only newly selected, incomplete events need further downloads. Previously
+collected events outside the subset stay in the historical summary and may
+still appear in the final joined dataset; they are not deleted or relabeled.
+The prepared input/audit describe the current target, while `batch_summary.csv`
+describes all attempts made so far. The complete dataset still keeps all base
+events, including those not selected for satellite collection.
 
 ## Event Folder
 

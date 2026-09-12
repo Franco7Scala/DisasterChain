@@ -6,6 +6,8 @@ from typing import Any, Iterable, Mapping, Optional
 
 import pandas as pd
 
+from support.satellite_selection import DEFAULT_CAUSAL_CSV, parse_boolean, read_causal_chain_statuses
+
 
 DEFAULT_INPUT_CSV = Path(
     "results/recent_emdat_geocoding/emdat_2014_final_llm70b_review_resolved_v2.csv"
@@ -70,7 +72,11 @@ def satellite_input_with_audit(
     *,
     disaster_type: str,
     min_start_date: str,
+    all_events: bool = False,
+    causal_chain_statuses: Optional[Mapping[str, str]] = None,
 ) -> tuple[pd.DataFrame, pd.DataFrame]:
+    if not all_events and causal_chain_statuses is None:
+        raise SystemExit("Causal-chain eligibility is required unless all_events=True")
     columns = required_columns(frame)
     required = ("event_id", "country", "disaster_type", "latitude", "longitude")
     missing = [name for name in required if columns[name] is None]
@@ -112,16 +118,30 @@ def satellite_input_with_audit(
         checks.append((~output["disaster_type"].str.casefold().eq(disaster_type.casefold()), "type_filter"))
     if min_start_date:
         checks.append((dates.lt(pd.Timestamp(min_start_date)), "before_start_date"))
+    chain_status = (
+        pd.Series("not_checked", index=output.index) if all_events
+        else ids.map(causal_chain_statuses).fillna("missing_causal_chain")
+    )
+    if not all_events:
+        checks.append((chain_status.ne("valid"), "no_valid_causal_chain"))
     for mask, label in checks:
         reason.loc[reason.eq("selected") & mask] = label
     audit = output[["emdat_disaster_id", "disaster_type", "start_date"]].copy()
     audit["selection_status"] = reason
+    audit["causal_chain_status"] = chain_status
+    audit["satellite_all_events"] = all_events
     return output.loc[reason.eq("selected")].reset_index(drop=True), audit
 
 
-# Returns only rows with usable dates and coordinates, without restricting the disaster type.
-def build_satellite_input(frame: pd.DataFrame, *, disaster_type: str = "", min_start_date: str = "2014-04-03") -> pd.DataFrame:
-    return satellite_input_with_audit(frame, disaster_type=disaster_type, min_start_date=min_start_date)[0]
+# Returns satellite-ready events under the requested causal-chain selection policy.
+def build_satellite_input(
+    frame: pd.DataFrame, *, disaster_type: str = "", min_start_date: str = "2014-04-03",
+    all_events: bool = False, causal_chain_statuses: Optional[Mapping[str, str]] = None,
+) -> pd.DataFrame:
+    return satellite_input_with_audit(
+        frame, disaster_type=disaster_type, min_start_date=min_start_date,
+        all_events=all_events, causal_chain_statuses=causal_chain_statuses,
+    )[0]
 
 
 # Defines the command-line options for preparing satellite batch input.
@@ -133,6 +153,10 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--output-csv", default=str(DEFAULT_OUTPUT_CSV))
     parser.add_argument("--disaster-type", default="", help="Optional type filter; defaults to all types")
     parser.add_argument("--min-start-date", default="2014-04-03")
+    parser.add_argument("--all-events", type=parse_boolean, default=False, metavar="{true,false}",
+                        help="true: all events with coordinates; false (default): require a valid non-empty causal chain")
+    parser.add_argument("--causal-csv", default=DEFAULT_CAUSAL_CSV,
+                        help="Final normalized causal chains, required only when --all-events false")
     return parser.parse_args()
 
 
@@ -145,11 +169,15 @@ def main() -> None:
         raise SystemExit(f"Input CSV not found: {input_csv}")
 
     frame = pd.read_csv(input_csv, low_memory=False)
+    chain_statuses = None if args.all_events else read_causal_chain_statuses(args.causal_csv)
     output, audit = satellite_input_with_audit(
         frame,
         disaster_type=args.disaster_type,
         min_start_date=args.min_start_date,
+        all_events=args.all_events,
+        causal_chain_statuses=chain_statuses,
     )
+    audit["causal_chain_source_csv"] = "" if args.all_events else str(Path(args.causal_csv).resolve())
     output_csv.parent.mkdir(parents=True, exist_ok=True)
     output.to_csv(output_csv, index=False)
     audit_csv = output_csv.with_name(output_csv.stem + "_selection_audit.csv")
@@ -160,6 +188,10 @@ def main() -> None:
 
     print("Input rows:", len(frame))
     print("Satellite rows:", len(output))
+    print("Satellite all events:", args.all_events)
+    if chain_statuses is not None:
+        print("Valid non-empty causal chains in source:", sum(status == "valid" for status in chain_statuses.values()))
+        print("Causal-chain CSV:", args.causal_csv)
     print("Disaster type:", args.disaster_type or "all")
     print("Min start date:", args.min_start_date or "none")
     print("Output CSV:", output_csv)

@@ -68,8 +68,8 @@ Available groups:
   events.
 - `reasoning`: collect news, generate summaries, validate them, extract causal
   chains, and normalize `type_event` labels.
-- `satellite`: prepare all event types (including Flood) and collect the general
-  Sentinel-1/2/3 and ESA WorldCover layers.
+- `satellite`: select events with valid causal chains by default, across all
+  disaster types including Flood, and collect Sentinel-1/2/3 and ESA WorldCover.
 - `final`: assemble the single event-level CSV that summarizes all final outputs.
 
 The full pipeline keeps the detailed outputs for each processing stage and also
@@ -101,8 +101,51 @@ Heavy steps have external requirements:
 The release workflow does not filter by disaster type unless
 `--satellite-disaster-type` is explicitly supplied. Events need an exact start
 date and valid coordinates; dates are not invented for incomplete records.
+By default, `--satellite-all-events false` also requires a valid, non-empty
+causal chain from the normalized causal CSV. Use `true` to collect satellite
+data for all events with usable dates and coordinates instead:
+
+```bash
+python src/main.py release --steps satellite --satellite-all-events false
+python src/main.py release --steps satellite --satellite-all-events true
+```
+
+These commands only show the plan; add `--execute` to run it. In the full
+workflow, causal-chain extraction and normalization already precede satellite
+selection. For a satellite-only run, the default `false` mode requires the
+existing normalized causal CSV; override it with `--normalized-causal-csv PATH`.
+The `true` mode does not require or read that file for satellite selection.
+
+An eligible chain has at least one saved step, valid JSON and step fields, and
+one of these parse statuses: `parsed`, `parsed_with_dropped_items`, or
+`parsed_with_dropped_unsupported_quotes`. The last two retain valid steps after
+others were discarded. Empty, skipped, malformed or missing chains are excluded;
+`causal_chain_length` alone is not used as proof. This selection reuses the
+earlier evidence validation and does not call the LLM or repeat quote matching.
+It does not establish that the extracted causal links are scientifically correct.
+
 The preparation step writes an input table, a row-level exclusion audit, and
-counts by disaster type and selection reason.
+counts by disaster type and selection reason. The audit records
+`no_valid_causal_chain` where applicable, plus `causal_chain_status`,
+`satellite_all_events` and `causal_chain_source_csv`. Date/coordinate exclusions
+take precedence, so each event has one main selection reason.
+
+Standalone preparation and batch commands use `--all-events false` (default)
+or `--all-events true`, with `--causal-csv PATH` for a custom causal source.
+The batch rechecks the policy before applying `--limit`, including when an old
+unfiltered input CSV is used. A missing source, missing required columns or
+duplicate causal event ids stops the run before API calls; it never silently
+falls back to all events. Explicit event ids must also satisfy the policy unless
+`--all-events true` is supplied. The single-event extraction tool remains a
+manual tool and is not part of this batch selection policy.
+
+Changing the flag only changes selection: existing downloads are kept, and
+compatible selected checkpoints are reused. Previously downloaded events outside
+the new subset remain on disk and in the historical summary/final dataset.
+No sensor, window or resolution changes. Use the `satellite` group to regenerate
+the event table when switching back to `true`; a standalone downloader cannot
+restore rows previously removed from its input CSV. Selecting fewer events does
+not restore exhausted account quotas or guarantee that the remaining quota is sufficient.
 
 The default area is a fixed approximately 20 km by 20 km box around each event's
 coordinates, not the full disaster footprint or an administrative bounding box.
@@ -208,7 +251,7 @@ python -u src/fetch_multimodal_satellite_batch.py --limit 3 --sleep-seconds 2
 ```
 
 Inspect its summary and a few TIFF/PNG files. If it finishes without unresolved
-errors and storage/quotas permit the run, launch the full satellite group and
+errors and storage/quotas permit the run, launch the selected satellite scope and
 the final dataset assembly, without rerunning LLM or news stages:
 
 ```bash

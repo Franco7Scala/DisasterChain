@@ -34,21 +34,21 @@ class InputTests(unittest.TestCase):
             "latitude": [42, 42, 42, None, 999, 42, 42], "longitude": [12] * 7,
         })
         selected, audit = prepare.satellite_input_with_audit(
-            frame, disaster_type="", min_start_date="2014-04-03",
+            frame, disaster_type="", min_start_date="2014-04-03", all_events=True,
         )
         self.assertEqual(selected.emdat_disaster_id.tolist(), ["flood", "fire", "road"])
         self.assertEqual(audit.selection_status.tolist(), [
             "selected", "selected", "selected", "missing_coordinates", "invalid_coordinates",
             "before_start_date", "missing_or_invalid_date",
         ])
-        self.assertEqual(len(prepare.build_satellite_input(frame, disaster_type="Flood")), 1)
+        self.assertEqual(len(prepare.build_satellite_input(frame, disaster_type="Flood", all_events=True)), 1)
 
     def test_duplicate_ids_fail(self):
         frame = pd.DataFrame({"event_id": ["x", "x"], "country": ["IT"] * 2,
                               "disaster_type": ["Flood"] * 2, "start_date": ["2020-01-01"] * 2,
                               "latitude": [42] * 2, "longitude": [12] * 2})
         with self.assertRaisesRegex(SystemExit, "Duplicate"):
-            prepare.build_satellite_input(frame)
+            prepare.build_satellite_input(frame, all_events=True)
 
     def test_release_runs_general_not_flood_specific(self):
         with patch.object(sys, "argv", ["release"]):
@@ -69,7 +69,7 @@ class InputTests(unittest.TestCase):
             pd.DataFrame({"emdat_disaster_id": ["flood", "wildfire"], "country": ["Italy"] * 2,
                           "disaster_type": ["Flood", "Wildfire"], "start_date": ["2020-01-01"] * 2,
                           "latitude": [42, 43], "longitude": [12, 13]}).to_csv(path, index=False)
-            with patch.object(sys, "argv", ["batch", "--events-csv", str(path), "--limit", "0", "--dry-run"]):
+            with patch.object(sys, "argv", ["batch", "--events-csv", str(path), "--limit", "0", "--dry-run", "--all-events", "true"]):
                 args = batch.parse_args()
             with patch.object(batch, "run_multimodal_satellite_event") as run:
                 batch.run_batch(args)

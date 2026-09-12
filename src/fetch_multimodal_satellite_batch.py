@@ -27,6 +27,7 @@ from support.multimodal_satellite_engine import (
     SatelliteConfigurationError,
 )
 from support.satellite_engine import SatelliteEvent, SentinelHubRequestError, require_copernicus_credentials
+from support.satellite_selection import DEFAULT_CAUSAL_CSV, parse_boolean, read_causal_chain_statuses
 
 
 SUMMARY_FIELDS = [
@@ -70,6 +71,10 @@ def parse_args() -> argparse.Namespace:
         )
     )
     parser.add_argument("--events-csv", default=str(Path(MULTIMODAL_SATELLITE_OUTPUT_DIR) / "events.csv"))
+    parser.add_argument("--all-events", type=parse_boolean, default=False, metavar="{true,false}",
+                        help="true: all events with coordinates; false (default): require a valid non-empty causal chain")
+    parser.add_argument("--causal-csv", default=DEFAULT_CAUSAL_CSV,
+                        help="Final normalized causal chains, required only when --all-events false")
     parser.add_argument(
         "--event-id",
         action="append",
@@ -236,6 +241,17 @@ def select_events(args: argparse.Namespace) -> List[SatelliteEvent]:
                 continue
             selected_rows.append(row)
 
+    if not args.all_events:
+        chain_statuses = read_causal_chain_statuses(args.causal_csv)
+        excluded = [row.get("emdat_disaster_id", "") for row in selected_rows
+                    if chain_statuses.get(row.get("emdat_disaster_id")) != "valid"]
+        if requested_ids and excluded:
+            raise SystemExit("Requested event(s) without a valid causal chain: " + ", ".join(excluded)
+                             + "; use --all-events true to include them explicitly")
+        selected_rows = [row for row in selected_rows
+                         if chain_statuses.get(row.get("emdat_disaster_id")) == "valid"]
+        print(f"Causal-chain filter: excluded {len(excluded)} event(s), kept {len(selected_rows)} before limit")
+
     if requested_ids:
         limit = args.limit
     else:
@@ -400,6 +416,7 @@ def print_dry_run(events: List[SatelliteEvent], args: argparse.Namespace) -> Non
         limit_label = args.limit
 
     print(f"Dry run selected {len(events)} event(s). No API calls will be made.")
+    print("Satellite all events:", args.all_events)
     print(
         "Filters: "
         f"disaster_type={args.disaster_type!r}, "

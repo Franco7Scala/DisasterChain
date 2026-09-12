@@ -9,6 +9,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterable, List, Sequence
 
+from support.satellite_selection import parse_boolean
+
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_START_DATE = "2014-04-03"
@@ -575,7 +577,7 @@ def build_steps(args: argparse.Namespace) -> List[PipelineStep]:
     steps.append(
         PipelineStep(
             name="satellite-input",
-            description="Prepare satellite inputs for every disaster type and audit excluded events.",
+            description="Prepare satellite inputs using the selected causal-chain policy and audit excluded events.",
             commands=[
                 [
                     py,
@@ -588,9 +590,13 @@ def build_steps(args: argparse.Namespace) -> List[PipelineStep]:
                     args.satellite_disaster_type,
                     "--min-start-date",
                     args.start_date,
+                    "--all-events",
+                    str(args.satellite_all_events).lower(),
+                    "--causal-csv",
+                    args.normalized_causal_csv,
                 ]
             ],
-            required_inputs=[final_csv],
+            required_inputs=[final_csv] + ([] if args.satellite_all_events else [args.normalized_causal_csv]),
             expected_outputs=[args.satellite_input_csv],
         )
     )
@@ -605,6 +611,10 @@ def build_steps(args: argparse.Namespace) -> List[PipelineStep]:
                     "src/fetch_multimodal_satellite_batch.py",
                     "--events-csv",
                     args.satellite_input_csv,
+                    "--all-events",
+                    str(args.satellite_all_events).lower(),
+                    "--causal-csv",
+                    args.normalized_causal_csv,
                     "--disaster-type",
                     args.satellite_disaster_type,
                     "--min-start-date",
@@ -627,7 +637,7 @@ def build_steps(args: argparse.Namespace) -> List[PipelineStep]:
                     args.satellite_summary_csv,
                 ]
             ],
-            required_inputs=[args.satellite_input_csv],
+            required_inputs=[args.satellite_input_csv] + ([] if args.satellite_all_events else [args.normalized_causal_csv]),
             expected_outputs=[args.satellite_summary_csv],
             note="Requires Copernicus credentials and rasterio; resumes compatible checkpoints. No disaster-specific indices.",
         )
@@ -901,6 +911,8 @@ def parse_args() -> argparse.Namespace:
         help="Regenerate LLM JSONL outputs instead of resuming existing ones.",
     )
     parser.add_argument("--satellite-input-csv", default=DEFAULT_SATELLITE_INPUT_CSV)
+    parser.add_argument("--satellite-all-events", type=parse_boolean, default=False, metavar="{true,false}",
+                        help="true: all events with coordinates; false (default): only events with valid non-empty causal chains")
     parser.add_argument("--satellite-summary-csv", default=DEFAULT_SATELLITE_SUMMARY_CSV)
     parser.add_argument("--satellite-ranking-csv", default=DEFAULT_SATELLITE_RANKING_CSV)
     parser.add_argument("--satellite-output-dir", default="results/multimodal_satellite_2014_plus")
