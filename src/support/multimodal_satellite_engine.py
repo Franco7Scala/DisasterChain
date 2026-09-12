@@ -19,6 +19,12 @@ from support.constants import (
     SENTINEL_CATALOG_SEARCH_LIMIT,
 )
 from support.worldcover import download_worldcover
+from support.satellite_rendering import (
+    RENDERING_VERSION,
+    download_raw_bundle,
+    render_s1_layers,
+    render_s2_layers,
+)
 from support.satellite_engine import (
     SatelliteEvent,
     SentinelHubClient,
@@ -75,97 +81,20 @@ class DailyCatalogClient(SentinelHubClient):
                 if from_date <= _scene_datetime(item)[:10] <= to_date]
 
 
-S2_TRUE_COLOR_TIFF_EVALSCRIPT = """
-//VERSION=3
-function setup() {
-  return {
-    input: ["B02", "B03", "B04", "dataMask"],
-    output: { id: "default", bands: 3, sampleType: "UINT16" }
-  };
-}
-
-function evaluatePixel(sample) {
-  if (sample.dataMask === 0) {
-    return [0, 0, 0];
-  }
-  return [scale(sample.B04), scale(sample.B03), scale(sample.B02)];
-}
-
-function scale(value) {
-  return Math.round(Math.max(0, Math.min(1, value * 2.5)) * 65535);
-}
-"""
-
-
-S2_FALSE_COLOR_TIFF_EVALSCRIPT = """
-//VERSION=3
-function setup() {
-  return {
-    input: ["B04", "B08", "B12", "dataMask"],
-    output: { id: "default", bands: 3, sampleType: "UINT16" }
-  };
-}
-
-function evaluatePixel(sample) {
-  if (sample.dataMask === 0) {
-    return [0, 0, 0];
-  }
-  return [scale(sample.B12), scale(sample.B08), scale(sample.B04)];
-}
-
-function scale(value) {
-  return Math.round(Math.max(0, Math.min(1, value * 2.5)) * 65535);
-}
-"""
-
-
-S2_TRUE_COLOR_PREVIEW_EVALSCRIPT = """
-//VERSION=3
-function setup() {
-  return {
-    input: ["B02", "B03", "B04", "dataMask"],
-    output: { id: "default", bands: 3, sampleType: "AUTO" }
-  };
-}
-
-function evaluatePixel(sample) {
-  if (sample.dataMask === 0) {
-    return [0, 0, 0];
-  }
-  return [2.5 * sample.B04, 2.5 * sample.B03, 2.5 * sample.B02];
-}
-"""
-
-
-S2_FALSE_COLOR_PREVIEW_EVALSCRIPT = """
-//VERSION=3
-function setup() {
-  return {
-    input: ["B04", "B08", "B12", "dataMask"],
-    output: { id: "default", bands: 3, sampleType: "AUTO" }
-  };
-}
-
-function evaluatePixel(sample) {
-  if (sample.dataMask === 0) {
-    return [0, 0, 0];
-  }
-  return [2.5 * sample.B12, 2.5 * sample.B08, 2.5 * sample.B04];
-}
-"""
-
-
-S2_RAW_BANDS_TIFF_EVALSCRIPT = """
+S2_RAW_BUNDLE_EVALSCRIPT = """
 //VERSION=3
 function setup() {
   return {
     input: S2_RAW_BANDS,
-    output: { id: "default", bands: S2_RAW_BAND_COUNT, sampleType: "FLOAT32" }
+    output: [
+      { id: "default", bands: S2_RAW_BAND_COUNT, sampleType: "FLOAT32" },
+      { id: "data_mask", bands: 1, sampleType: "UINT8" }
+    ]
   };
 }
 
 function evaluatePixel(sample) {
-  return [
+  return { default: [
     sample.B02,
     sample.B03,
     sample.B04,
@@ -176,54 +105,34 @@ function evaluatePixel(sample) {
     sample.B8A,
     sample.B11,
     sample.B12
-  ];
+  ], data_mask: [sample.dataMask] };
 }
 """.replace(
     "S2_RAW_BANDS",
-    json.dumps(MULTIMODAL_S2_RAW_BANDS),
+    json.dumps(MULTIMODAL_S2_RAW_BANDS + ["dataMask"]),
 ).replace(
     "S2_RAW_BAND_COUNT",
     str(len(MULTIMODAL_S2_RAW_BANDS)),
 )
 
 
-S1_VV_VH_TIFF_EVALSCRIPT = """
+S1_RAW_BUNDLE_EVALSCRIPT = """
 //VERSION=3
 function setup() {
   return {
     input: ["VV", "VH", "dataMask"],
-    output: { id: "default", bands: 2, sampleType: "FLOAT32" }
+    output: [
+      { id: "default", bands: 2, sampleType: "FLOAT32" },
+      { id: "data_mask", bands: 1, sampleType: "UINT8" }
+    ]
   };
 }
 
 function evaluatePixel(sample) {
-  if (sample.dataMask === 0) {
-    return [0, 0];
-  }
-  return [sample.VV, sample.VH];
-}
-"""
-
-
-S1_VV_VH_PREVIEW_EVALSCRIPT = """
-//VERSION=3
-function setup() {
   return {
-    input: ["VV", "VH", "dataMask"],
-    output: { id: "default", bands: 3, sampleType: "AUTO" }
+    default: sample.dataMask === 0 ? [0, 0] : [sample.VV, sample.VH],
+    data_mask: [sample.dataMask]
   };
-}
-
-function evaluatePixel(sample) {
-  return [toDb(sample.VV), toDb(sample.VH), sample.dataMask];
-}
-
-function toDb(linear) {
-  if (linear <= 0) {
-    return 0;
-  }
-  var db = 10 * Math.log(linear) / Math.LN10;
-  return Math.max(0, Math.min(1, (db + 25) / 25));
 }
 """
 
@@ -453,6 +362,7 @@ def _write_process_output(
     return str(output_path)
 
 
+# Downloads reflectance and a validity mask once, then renders the color products locally.
 def download_s2_daily_layers(
     client: SentinelHubClient,
     scene: Dict,
@@ -467,93 +377,16 @@ def download_s2_daily_layers(
     }
     processing = {"upsampling": "BILINEAR", "downsampling": "BILINEAR"}
 
-    outputs = {
-        "true_color_tif": _write_process_output(
-            client,
-            process_payload_by_resolution(
-                "sentinel-2-l2a",
-                bbox,
-                time_from,
-                time_to,
-                S2_TRUE_COLOR_TIFF_EVALSCRIPT,
-                config.output_resolution_m,
-                "image/tiff",
-                data_filter=common_filter,
-                processing=processing,
-            ),
-            day_dir / "true_color.tif",
-            "image/tiff",
-        ),
-        "false_color_tif": _write_process_output(
-            client,
-            process_payload_by_resolution(
-                "sentinel-2-l2a",
-                bbox,
-                time_from,
-                time_to,
-                S2_FALSE_COLOR_TIFF_EVALSCRIPT,
-                config.output_resolution_m,
-                "image/tiff",
-                data_filter=common_filter,
-                processing=processing,
-            ),
-            day_dir / "false_color.tif",
-            "image/tiff",
-        ),
-        "raw_bands_tif": _write_process_output(
-            client,
-            process_payload_by_resolution(
-                "sentinel-2-l2a",
-                bbox,
-                time_from,
-                time_to,
-                S2_RAW_BANDS_TIFF_EVALSCRIPT,
-                config.output_resolution_m,
-                "image/tiff",
-                data_filter=common_filter,
-                processing=processing,
-            ),
-            day_dir / "raw_bands.tif",
-            "image/tiff",
-        ),
-    }
-
-    if config.include_png_previews:
-        outputs["true_color_preview_png"] = _write_process_output(
-            client,
-            process_payload_by_resolution(
-                "sentinel-2-l2a",
-                bbox,
-                time_from,
-                time_to,
-                S2_TRUE_COLOR_PREVIEW_EVALSCRIPT,
-                config.output_resolution_m,
-                "image/png",
-                data_filter=common_filter,
-                processing=processing,
-            ),
-            day_dir / "true_color_preview.png",
-            "image/png",
-        )
-        outputs["false_color_preview_png"] = _write_process_output(
-            client,
-            process_payload_by_resolution(
-                "sentinel-2-l2a",
-                bbox,
-                time_from,
-                time_to,
-                S2_FALSE_COLOR_PREVIEW_EVALSCRIPT,
-                config.output_resolution_m,
-                "image/png",
-                data_filter=common_filter,
-                processing=processing,
-            ),
-            day_dir / "false_color_preview.png",
-            "image/png",
-        )
-    return outputs
+    payload = process_payload_by_resolution(
+        "sentinel-2-l2a", bbox, time_from, time_to, S2_RAW_BUNDLE_EVALSCRIPT,
+        config.output_resolution_m, "image/tiff", data_filter=common_filter, processing=processing,
+    )
+    payload["output"]["responses"].append({"identifier": "data_mask", "format": {"type": "image/tiff"}})
+    raw_path, mask_path = download_raw_bundle(client, payload, day_dir, "raw_bands.tif", len(MULTIMODAL_S2_RAW_BANDS))
+    return render_s2_layers(raw_path, mask_path, config.include_png_previews)
 
 
+# Downloads calibrated VV/VH and their mask once, then renders the radar preview locally.
 def download_s1_daily_layers(
     client: SentinelHubClient,
     scene: Dict,
@@ -573,42 +406,13 @@ def download_s1_daily_layers(
         "demInstance": "COPERNICUS_30",
         "backCoeff": "GAMMA0_TERRAIN",
     }
-    outputs = {
-        "vv_vh_tif": _write_process_output(
-            client,
-            process_payload_by_resolution(
-                "sentinel-1-grd",
-                bbox,
-                time_from,
-                time_to,
-                S1_VV_VH_TIFF_EVALSCRIPT,
-                config.output_resolution_m,
-                "image/tiff",
-                data_filter=common_filter,
-                processing=processing,
-            ),
-            day_dir / "vv_vh.tif",
-            "image/tiff",
-        )
-    }
-    if config.include_png_previews:
-        outputs["vv_vh_preview_png"] = _write_process_output(
-            client,
-            process_payload_by_resolution(
-                "sentinel-1-grd",
-                bbox,
-                time_from,
-                time_to,
-                S1_VV_VH_PREVIEW_EVALSCRIPT,
-                config.output_resolution_m,
-                "image/png",
-                data_filter=common_filter,
-                processing=processing,
-            ),
-            day_dir / "vv_vh_preview.png",
-            "image/png",
-        )
-    return outputs
+    payload = process_payload_by_resolution(
+        "sentinel-1-grd", bbox, time_from, time_to, S1_RAW_BUNDLE_EVALSCRIPT,
+        config.output_resolution_m, "image/tiff", data_filter=common_filter, processing=processing,
+    )
+    payload["output"]["responses"].append({"identifier": "data_mask", "format": {"type": "image/tiff"}})
+    raw_path, mask_path = download_raw_bundle(client, payload, day_dir, "vv_vh.tif", 2)
+    return render_s1_layers(raw_path, mask_path, config.include_png_previews)
 
 
 def download_s3_daily_layers(
@@ -741,7 +545,10 @@ def fetch_sensor_day(client, bbox, day, sensor, output_root, config):
         return {**empty_sensor_slot(), "status": "no_scene"}
     outputs = downloaders[sensor](client, scene, bbox,
                                   output_root / "satellite" / directories[sensor] / day, config)
-    return {"status": "available", "available": True, "scene": scene_record(scene), "outputs": outputs}
+    slot = {"status": "available", "available": True, "scene": scene_record(scene), "outputs": outputs}
+    if sensor in {"sentinel_1", "sentinel_2"}:
+        slot["rendering_version"] = RENDERING_VERSION
+    return slot
 
 
 def run_multimodal_satellite_event(

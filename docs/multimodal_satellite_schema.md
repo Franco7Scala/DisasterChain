@@ -27,11 +27,15 @@ results/multimodal_satellite_2014_plus/<event_id>/
         true_color.tif
         false_color.tif
         raw_bands.tif
+        data_mask.tif
+        raw_download.json
         true_color_preview.png
         false_color_preview.png
     sentinel-1/
       YYYY-MM-DD/
         vv_vh.tif
+        data_mask.tif
+        raw_download.json
         vv_vh_preview.png
     sentinel-3-slstr/
       YYYY-MM-DD/
@@ -57,6 +61,8 @@ Daily files:
 - `false_color.tif`: false color composite using SWIR, NIR, RED.
 - `raw_bands.tif`: multiband TIFF with the requested raw bands.
 - PNG previews are generated only for human inspection.
+- `data_mask.tif`: the provider's validity mask (1 = valid, 0 = no data), not a cloud or disaster mask.
+- `raw_download.json`: request fingerprint used to resume local rendering without reprocessing the bands.
 
 Raw bands saved in `raw_bands.tif`:
 
@@ -67,6 +73,14 @@ B02, B03, B04, B05, B06, B07, B08, B8A, B11, B12
 All Sentinel-2 outputs use an approximately 20 m grid in EPSG:4326, calculated
 from the area dimensions. Bands are resampled with bilinear interpolation;
 the output is not a copy of the original native sensor grid.
+
+New acquisitions download the ten FLOAT32 reflectance bands and a separate
+UINT8 validity mask in a single Process API TAR response. RGB GeoTIFFs are
+derived locally with the existing gain of 2.5, clipping to [0, 1], and UINT16
+scaling; previews use the same gain with UINT8 scaling. The mask is preserved
+in the GeoTIFFs, and their transform and CRS are copied from the raw bands.
+The raw reflectance TIFF is not rewritten by the renderer. Rounding at display
+quantization boundaries may differ slightly from the older server-side renderer.
 
 ## Sentinel-1 GRD
 
@@ -80,6 +94,8 @@ Daily files:
 
 - `vv_vh.tif`: two-band radar TIFF with VV and VH.
 - `vv_vh_preview.png`: dB-scaled RGB preview for quick inspection.
+- `data_mask.tif`: the provider's validity mask, downloaded together with VV/VH.
+- `raw_download.json`: request fingerprint for resumable local rendering.
 
 Expected filters:
 
@@ -91,6 +107,11 @@ resolution = HIGH
 
 The TIFF stores the two radar channels; the preview is not used as a scientific
 layer.
+
+VV/VH remain FLOAT32, orthorectified with the Copernicus 30 m DEM and calibrated
+to GAMMA0_TERRAIN by the service. Only the preview is produced locally: VV and
+VH use the existing -25 to 0 dB display range, with validity in the blue channel.
+Non-positive radar values are displayed as zero; the scientific TIFF is unchanged.
 
 ## Sentinel-3 SLSTR
 
@@ -153,6 +174,18 @@ The file is checkpointed after every sensor-day. Existing compatible slots are
 reused only when their output files still exist and have nonzero size.
 Missing-day counts include all unavailable days; error-day counts distinguish
 request failures from the absence of an acquisition.
+
+New S1/S2 slots include `rendering_version: local-from-raw-v1`; older completed
+slots remain compatible and are not regenerated just to add a validity mask.
+The raw cache validates band counts, dtypes, dimensions and mask alignment, and
+is reused only for the same request fingerprint. A changed acquisition or
+missing/corrupt raw file requires a new download. Response archives are read
+only for their expected TIFF members; arbitrary paths are never extracted.
+
+This reduces Process API calls per available acquisition from five to one for
+S2 and two to one for S1 with default previews enabled. Catalog lookups, S3,
+WorldCover and the 21-day window are unchanged. These call counts are not a PU
+budget estimate; account-level quotas still apply and may stop a massive run.
 
 The batch summary includes all disaster types, not just Flood. Its latest row
 per event is joined into the final complete dataset with a `satellite_` prefix.

@@ -161,6 +161,31 @@ before each new event; it is not a guarantee that the full batch will fit.
 Raw ten-band S2 output alone is about 40 MB per 1000x1000 acquisition before
 compression, so check storage and account quotas before the massive run.
 
+The general module downloads raw bands and an explicit `data_mask.tif` together
+in one Process API response per S1/S2 acquisition. S2 true/false-color GeoTIFFs
+and PNG previews, and the S1 PNG preview, are rendered locally using numpy,
+rasterio, and Pillow. The scientific raw TIFFs retain their ten S2 bands or two
+S1 channels. This reduces the default Process calls from five to one for S2,
+and from two to one for S1; it does not imply the same percentage reduction in
+Processing Units, and it does not replenish an exhausted quota.
+
+The raw request fingerprint is saved in `raw_download.json` after both TIFFs
+are validated. A failed local rendering can reuse that download when the
+request is unchanged. Complete older event checkpoints are preserved without
+requiring an extra mask or regenerating their products. New sensor slots record
+`rendering_version=local-from-raw-v1`; no sensor, date window, resolution, or
+selection filter is removed by this optimization. PNGs are inspection products,
+and display rounding may differ slightly from the former server-side renderer.
+
+After a quota failure, do not use `--force` or delete checkpoints. Get the
+account quota restored or extended before a new real smoke test, compare the
+measured Requests and Processing Units before/after that test, then reassess
+the full batch budget. Offline tests can run without credentials or API calls:
+
+```bash
+python -m unittest discover -s tests -v
+```
+
 For the existing cluster checkout, after pushing local code changes:
 
 ```bash
