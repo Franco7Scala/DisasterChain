@@ -188,6 +188,29 @@ or missing downloads. A configuration change requires a new output directory or
 an explicit `--force` on the standalone batch script. Run only one satellite
 batch against a given output directory at a time.
 
+The updated batch holds a `.satellite.lock` in its output root, and each event
+has a separate lock around its manifest and product writes. A second updated
+batch using the same root, or a second writer for the same event, fails before
+starting new downloads. Locking uses [filelock](https://py-filelock.readthedocs.io/en/latest/)
+and must be supported by the filesystem; verify it on the cluster's shared storage.
+Do not delete lock files to bypass an active writer. Stop older running versions
+before deploying this change, since they do not participate in locking.
+On the Linux cluster, run the offline tests with temporary fixtures on the
+same filesystem as the satellite outputs to check inter-process locking there:
+
+```bash
+TMPDIR="$PWD/results/multimodal_satellite_2014_plus" python -m unittest discover -s tests -v
+```
+
+The tests create and clean up their own temporary directories, use synthetic
+imagery, and make no live satellite requests.
+
+Raw S1/S2 downloads and local composites use private temporary subdirectories
+on the destination filesystem, rather than shared `raw_bands.tif.part` names.
+Validated files are promoted to their unchanged final names, and cleanup removes
+only the current attempt's staging directory. Interrupted downloads remain
+resumable; these changes do not invalidate existing compatible manifests.
+
 The batch summary records each attempt, so repeated runs may add rows for the
 same event; the final dataset keeps the latest record per event. `completed`
 means all requested checks finished and some sensor imagery was downloaded;
@@ -237,6 +260,7 @@ git status --short
 git pull --ff-only
 source /home/jovyan/users/saverio_polito/venvs/tirocinio/bin/activate
 python -m pip install rasterio
+python -m pip install filelock
 source ~/.copernicus_env
 df -h .
 python src/main.py release --execute --steps satellite-input

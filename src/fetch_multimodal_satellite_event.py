@@ -18,6 +18,7 @@ from support.multimodal_satellite_engine import (
     run_multimodal_satellite_event,
 )
 from support.satellite_engine import SatelliteEvent, event_bbox
+from support.satellite_lock import SatelliteOutputBusyError
 
 
 def load_event_from_csv(path: str, event_id: str) -> Optional[Dict[str, str]]:
@@ -177,7 +178,7 @@ def main() -> None:
             config,
             output_dir=args.output_dir,
         )
-    except RuntimeError as exc:
+    except (RuntimeError, SatelliteOutputBusyError) as exc:
         raise SystemExit(str(exc)) from exc
 
     print(f"Multimodal satellite extraction: {manifest['status']}.")

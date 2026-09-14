@@ -19,6 +19,7 @@ from support.constants import (
     SENTINEL_CATALOG_SEARCH_LIMIT,
 )
 from support.worldcover import download_worldcover
+from support.satellite_lock import satellite_output_lock
 from support.satellite_rendering import (
     RENDERING_VERSION,
     download_raw_bundle,
@@ -565,7 +566,12 @@ def run_multimodal_satellite_event(
     if bbox[0] < -180 or bbox[2] > 180 or bbox[1] < -90 or bbox[3] > 90:
         raise ValueError("Area crosses the antimeridian or a pole; split-area processing is required")
     output_root = (Path(output_dir or MULTIMODAL_SATELLITE_OUTPUT_DIR) / event.event_id).resolve()
-    output_root.mkdir(parents=True, exist_ok=True)
+    with satellite_output_lock(output_root):
+        return _run_locked_satellite_event(event, config, bbox, output_root, force)
+
+
+# Reads and updates an event only while its output directory is locked.
+def _run_locked_satellite_event(event, config, bbox, output_root, force):
     manifest_path = output_root / "manifest.json"
     dates = analysis_dates(event.start_date, config.window_days)
     daily_records = []

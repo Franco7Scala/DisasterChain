@@ -28,6 +28,7 @@ from support.multimodal_satellite_engine import (
 )
 from support.satellite_engine import SatelliteEvent, SentinelHubRequestError, require_copernicus_credentials
 from support.satellite_selection import DEFAULT_CAUSAL_CSV, parse_boolean, read_causal_chain_statuses
+from support.satellite_lock import SatelliteOutputBusyError, satellite_output_lock
 
 
 SUMMARY_FIELDS = [
@@ -445,6 +446,12 @@ def run_batch(args: argparse.Namespace) -> None:
         print_dry_run(events, args)
         return
 
+    with satellite_output_lock(args.output_dir):
+        run_selected_events(args, events, config)
+
+
+# Processes selected events while the caller holds the batch output lock.
+def run_selected_events(args, events, config):
     require_copernicus_credentials()
     run_started_at = datetime.now().isoformat(timespec="seconds")
     print(f"Selected {len(events)} event(s). Summary: {args.summary_csv}")
@@ -528,7 +535,10 @@ def run_batch(args: argparse.Namespace) -> None:
 
 
 def main() -> None:
-    run_batch(parse_args())
+    try:
+        run_batch(parse_args())
+    except SatelliteOutputBusyError as exc:
+        raise SystemExit(str(exc)) from exc
 
 
 if __name__ == "__main__":

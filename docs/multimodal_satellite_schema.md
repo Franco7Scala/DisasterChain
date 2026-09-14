@@ -215,6 +215,17 @@ is reused only for the same request fingerprint. A changed acquisition or
 missing/corrupt raw file requires a new download. Response archives are read
 only for their expected TIFF members; arbitrary paths are never extracted.
 
+Raw bundles and derived RGB/PNG outputs are staged in unique temporary
+subdirectories alongside their destinations. Cleanup never removes another
+attempt's `.part` file. Final product names and request fingerprints are unchanged.
+The batch output root and each event directory use independent `.satellite.lock`
+files via `filelock`, preventing overlapping updated batch writers or concurrent
+updates of one event. Locks are separate from the scientific manifest and do
+not count as data products. Lock-file presence alone is not a completion or
+running-status indicator. Do not manually delete locks held by another process;
+old code must be stopped before rollout, and shared-filesystem locking semantics
+must be verified on the execution host.
+
 This reduces Process API calls per available acquisition from five to one for
 S2 and two to one for S1 with default previews enabled. Catalog lookups, S3,
 WorldCover and the 21-day window are unchanged. These call counts are not a PU

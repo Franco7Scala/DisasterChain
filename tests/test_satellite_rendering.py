@@ -146,6 +146,37 @@ class RenderingTests(unittest.TestCase):
         self.download_s2()
         self.client.process_bytes.assert_called_once()
 
+    def test_overlapping_bundles_have_separate_temporary_files(self):
+        validate = rendering.validate_raw_pair
+        temporary_paths = []
+        nested = False
+
+        def interleave(raw_path, mask_path, band_count, payload):
+            nonlocal nested
+            temporary_paths.append(raw_path)
+            if not nested:
+                nested = True
+                rendering.download_raw_bundle(self.client, payload, self.root, "raw_bands.tif", band_count)
+            return validate(raw_path, mask_path, band_count, payload)
+
+        with patch.object(rendering, "validate_raw_pair", side_effect=interleave):
+            outputs = self.download_s2()
+        self.assertEqual(len(set(temporary_paths)), 2)
+        self.assertEqual(self.client.process_bytes.call_count, 2)
+        with rasterio.open(outputs["raw_bands_tif"]) as image:
+            np.testing.assert_array_equal(image.read(), self.s2)
+        self.assertFalse(list(self.root.glob(".raw-download-*")))
+
+    def test_failed_bundle_does_not_delete_another_attempts_part_file(self):
+        other_part = self.root / "raw_bands.tif.part"
+        other_part.write_bytes(b"another attempt")
+        self.client.process_bytes.side_effect = None
+        self.client.process_bytes.return_value = response_tar([("default.tif", raster_bytes(self.s2, self.bbox))])
+        with self.assertRaises(ValueError):
+            self.download_s2()
+        self.assertEqual(other_part.read_bytes(), b"another attempt")
+        self.assertFalse(list(self.root.glob(".raw-download-*")))
+
     def test_changed_acquisition_invalidates_raw_cache(self):
         self.download_s2()
         self.scene["properties"]["datetime"] = "2020-01-15T15:00:00Z"

@@ -13,3 +13,4 @@ accelerate
 bitsandbytes
 pycountry
 rasterio
+filelock

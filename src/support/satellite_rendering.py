@@ -2,6 +2,7 @@ import hashlib
 import io
 import json
 import tarfile
+from tempfile import TemporaryDirectory
 from pathlib import Path
 
 import numpy as np
@@ -58,8 +59,8 @@ def download_raw_bundle(client, payload, day_dir, raw_filename, band_count):
 
     content = client.process_bytes(payload, "application/tar", f"Process request for {raw_filename} and data_mask.tif")
     targets = {"default": raw_path, "data_mask": mask_path}
-    temporary = {key: path.with_suffix(path.suffix + ".part") for key, path in targets.items()}
-    try:
+    with TemporaryDirectory(prefix=".raw-download-", dir=day_dir) as staging:
+        temporary = {key: Path(staging) / (path.name + ".part") for key, path in targets.items()}
         with tarfile.open(fileobj=io.BytesIO(content), mode="r:*") as archive:
             seen = set()
             for member in archive:
@@ -75,12 +76,9 @@ def download_raw_bundle(client, payload, day_dir, raw_filename, band_count):
         marker.unlink(missing_ok=True)
         for key, path in targets.items():
             temporary[key].replace(path)
-        marker_part = marker.with_suffix(".json.part")
+        marker_part = Path(staging) / "raw_download.json.part"
         marker_part.write_text(json.dumps({"request_sha256": fingerprint}), encoding="utf-8")
         marker_part.replace(marker)
-    finally:
-        for path in temporary.values():
-            path.unlink(missing_ok=True)
     return raw_path, mask_path
 
 
@@ -105,8 +103,8 @@ def scale_rgb(values, valid, maximum):
 # Writes a georeferenced color composite while preserving the source grid and mask.
 def write_rgb_tiff(path, pixels, valid, profile, raw_path):
     path = Path(path)
-    temporary = path.with_suffix(".tif.part")
-    try:
+    with TemporaryDirectory(prefix=".rgb-tiff-", dir=path.parent) as staging:
+        temporary = Path(staging) / (path.name + ".part")
         with rasterio.Env(GDAL_TIFF_INTERNAL_MASK=True):
             with rasterio.open(
                 temporary, "w", driver="GTiff", width=profile["width"], height=profile["height"],
@@ -117,20 +115,16 @@ def write_rgb_tiff(path, pixels, valid, profile, raw_path):
                 image.write_mask(valid.astype("uint8") * 255)
                 image.update_tags(derived_from=Path(raw_path).name, rendering_version=RENDERING_VERSION)
         temporary.replace(path)
-    finally:
-        temporary.unlink(missing_ok=True)
     return str(path)
 
 
 # Writes an RGB preview locally without making another satellite API request.
 def write_rgb_png(path, pixels):
     path = Path(path)
-    temporary = path.with_suffix(".png.part")
-    try:
+    with TemporaryDirectory(prefix=".rgb-png-", dir=path.parent) as staging:
+        temporary = Path(staging) / (path.name + ".part")
         Image.fromarray(np.moveaxis(pixels, 0, -1)).save(temporary, format="PNG")
         temporary.replace(path)
-    finally:
-        temporary.unlink(missing_ok=True)
     return str(path)
 
 
