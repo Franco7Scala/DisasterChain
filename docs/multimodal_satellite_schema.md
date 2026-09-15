@@ -167,6 +167,25 @@ S7, S8, S9, F1, F2
 These bands are kept as general thermal source data for later processing. A
 specific LST/burn/drought product can be derived later if needed.
 
+The primary acquisition still uses cloud cover and then acquisition time for
+ranking. If Process returns HTTP 500 with `RENDERER_EXCEPTION` and an explicit
+404 for a `creo://eodata/Sentinel-3/SLSTR/` source file, the downloader tries the
+next acquisition on the same calendar day. It considers at most three distinct,
+non-overlapping acquisition windows in total; the existing HTTP retries still
+apply within each attempt. Changing only a catalog ID at the same timestamp
+would reuse the same Process time filter, so those candidates are deduplicated.
+The bbox, bands, resolution, NADIR view and 21-day window do not change.
+The Process request remains time-filtered, not pinned to a product ID; see the
+[SLSTR filtering documentation](https://documentation.dataspace.copernicus.eu/APIs/SentinelHub/Data/S3SLSTR.html#filtering-options).
+
+New SLSTR slots record `scene_attempts` for the latest sensor-day run: catalog
+scene metadata, outcome, and, on failure, the error, HTTP status and
+`missing_source_file` flag. `scene` on a successful slot describes the successful
+candidate. If all attempted candidates fail, the slot stays `error` and the
+event stays `partial`, not `no_scene` or `completed`. Other errors do not trigger
+alternative acquisitions; authentication and quota errors still stop the run.
+Completed old slots remain compatible and are reused without new requests.
+
 ## Land Cover / Land Use
 
 Product: ESA WorldCover, public three-degree COG tiles in EPSG:4326.

@@ -36,6 +36,9 @@ from support.satellite_engine import (
 )
 
 
+S3_DAILY_SCENE_ATTEMPT_LIMIT = 3
+
+
 class SatelliteConfigurationError(ValueError):
     pass
 
@@ -286,6 +289,12 @@ def select_daily_s3_scene(
     bbox: List[float],
     day: str,
 ) -> Optional[Dict]:
+    candidates = daily_s3_candidates(client, bbox, day)
+    return candidates[0] if candidates else None
+
+
+# Keeps up to three distinct same-day acquisition windows in the usual quality order.
+def daily_s3_candidates(client: SentinelHubClient, bbox: List[float], day: str) -> List[Dict]:
     items = client.catalog_search(
         "sentinel-3-slstr",
         bbox,
@@ -293,15 +302,25 @@ def select_daily_s3_scene(
         day,
         limit=SENTINEL_CATALOG_SEARCH_LIMIT,
     )
-    if not items:
-        return None
-    return sorted(
+    ordered = sorted(
         items,
         key=lambda item: (
             scene_cloud_cover(item),
             parse_catalog_datetime(_scene_datetime(item)),
         ),
-    )[0]
+    )
+    candidates, acquisitions = [], []
+    for item in ordered:
+        acquisition = parse_catalog_datetime(_scene_datetime(item))
+        if acquisition.date().isoformat() != day:
+            continue
+        if any(abs((acquisition - previous).total_seconds()) <= 2 for previous in acquisitions):
+            continue
+        candidates.append(item)
+        acquisitions.append(acquisition)
+        if len(candidates) == S3_DAILY_SCENE_ATTEMPT_LIMIT:
+            break
+    return candidates
 
 
 def process_payload_by_resolution(
@@ -532,14 +551,56 @@ def save_manifest(manifest: Dict, path: Path) -> None:
     temporary.replace(path)
 
 
+# Recognizes the provider's specific missing SLSTR source-file error, not generic failures.
+def missing_s3_source_file(error: SentinelHubRequestError) -> bool:
+    details = error.response_body.get("error", {})
+    if not isinstance(details, dict):
+        return False
+    message = details.get("message", "")
+    return bool(error.status_code == 500 and details.get("code") == "RENDERER_EXCEPTION"
+                and isinstance(message, str)
+                and "Illegal request to creo://eodata/Sentinel-3/SLSTR/" in message
+                and "HTTP Status: '404'" in message)
+
+
+# Tries another same-day SLSTR acquisition only when the provider cannot read the source file.
+def fetch_s3_sensor_day(client, bbox, day, output_root, config):
+    candidates = daily_s3_candidates(client, bbox, day)
+    if not candidates:
+        return {**empty_sensor_slot(), "status": "no_scene"}
+    attempts = []
+    day_dir = output_root / "satellite" / "sentinel-3-slstr" / day
+    for scene in candidates:
+        attempt = {"scene": scene_record(scene)}
+        try:
+            outputs = download_s3_daily_layers(client, scene, bbox, day_dir, config)
+        except SentinelHubRequestError as exc:
+            if exc.status_code in (401, 403, 429):
+                raise
+            missing_source = missing_s3_source_file(exc)
+            attempt.update(status="error", error=str(exc), http_status=exc.status_code,
+                           missing_source_file=missing_source)
+            attempts.append(attempt)
+            slot = {**empty_sensor_slot(str(exc)), "scene": scene_record(scene), "scene_attempts": attempts}
+            if not missing_source:
+                return slot
+            print(f"  {day} sentinel_3_slstr: source file unavailable for {scene.get('id', '')} "
+                  f"(acquisition attempt {len(attempts)}/{len(candidates)})", flush=True)
+            continue
+        attempt["status"] = "available"
+        attempts.append(attempt)
+        return {"status": "available", "available": True, "scene": scene_record(scene),
+                "outputs": outputs, "scene_attempts": attempts}
+    return slot
+
+
 # Downloads one sensor-day and distinguishes missing scenes from failed requests.
 def fetch_sensor_day(client, bbox, day, sensor, output_root, config):
-    selectors = {"sentinel_2": select_daily_s2_scene, "sentinel_1": select_daily_s1_scene,
-                 "sentinel_3_slstr": select_daily_s3_scene}
-    downloaders = {"sentinel_2": download_s2_daily_layers, "sentinel_1": download_s1_daily_layers,
-                   "sentinel_3_slstr": download_s3_daily_layers}
-    directories = {"sentinel_2": "sentinel-2", "sentinel_1": "sentinel-1",
-                   "sentinel_3_slstr": "sentinel-3-slstr"}
+    if sensor == "sentinel_3_slstr":
+        return fetch_s3_sensor_day(client, bbox, day, output_root, config)
+    selectors = {"sentinel_2": select_daily_s2_scene, "sentinel_1": select_daily_s1_scene}
+    downloaders = {"sentinel_2": download_s2_daily_layers, "sentinel_1": download_s1_daily_layers}
+    directories = {"sentinel_2": "sentinel-2", "sentinel_1": "sentinel-1"}
     selector_args = [config.max_cloud_cover] if sensor == "sentinel_2" else []
     scene = selectors[sensor](client, bbox, day, *selector_args)
     if scene is None:

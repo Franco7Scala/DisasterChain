@@ -220,6 +220,14 @@ checkpoint was reused; `manifest_status` preserves its underlying outcome.
 Available/missing/error-day counts are distinct, and `has_any_satellite_data`
 does not count WorldCover alone as event imagery.
 
+For a specific SLSTR renderer error caused by a missing provider source file
+(HTTP 500 wrapping a source-file 404), the downloader tries up to three distinct
+same-day acquisitions in the usual quality order. Other sensors and completed
+days are reused. Attempts are recorded in the sensor slot's `scene_attempts`;
+if none succeeds, it remains an error, not an absent scene or a completed event.
+Authentication, quota and generic server errors do not enable this fallback.
+The existing HTTP retries still apply separately to each acquisition attempt.
+
 Rate-limit and transient server errors use bounded retries. Authentication,
 permission or persistent rate-limit failures stop the batch instead of failing
 thousands of subsequent events. A free-disk reserve (5 GiB by default) is checked

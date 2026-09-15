@@ -47,9 +47,10 @@ ISO_FRACTION_RE = re.compile(r"(\.\d{1,6})(?=([+-]\d{2}:\d{2}|$))")
 
 
 class SentinelHubRequestError(RuntimeError):
-    def __init__(self, message: str, status_code: Optional[int] = None):
+    def __init__(self, message: str, status_code: Optional[int] = None, response_body: Optional[Dict] = None):
         super().__init__(message)
         self.status_code = status_code
+        self.response_body = response_body or {}
 
 
 @dataclass
@@ -193,11 +194,16 @@ class SentinelHubClient:
             return
 
         body = response.text.strip()
+        try:
+            details = json.loads(body)
+        except ValueError:
+            details = {}
         if len(body) > SENTINEL_API_ERROR_BODY_LIMIT:
             body = body[:SENTINEL_API_ERROR_BODY_LIMIT] + "..."
         raise SentinelHubRequestError(
             f"{context} failed with HTTP {response.status_code} "
-            f"{response.reason}. Response body: {body or '<empty>'}", response.status_code
+            f"{response.reason}. Response body: {body or '<empty>'}", response.status_code,
+            response_body=details if isinstance(details, dict) else {},
         )
 
     # Retries transient failures and renews an expired access token once.
