@@ -12,6 +12,11 @@ results/satellite/
 results/multimodal_satellite/
 results/multimodal_satellite_2014_plus/
 results/landsat_probe/
+results/release*/
+results/release*_selection.csv
+results/release*_export_report.json
+results/.release*.export.lock
+results/.dataset-export-*
 results/recent_emdat_geocoding/
 docs/project_log.md
 docs/laptop_handoff_project_log.md

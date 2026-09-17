@@ -70,7 +70,7 @@ Available groups:
   chains, and normalize `type_event` labels.
 - `satellite`: select events with valid causal chains by default, across all
   disaster types including Flood, and collect Sentinel-1/2/3 and ESA WorldCover.
-- `final`: assemble the single event-level CSV that summarizes all final outputs.
+- `final`: assemble the all-event CSV and export the selected public JSON/image package.
 
 The full pipeline keeps the detailed outputs for each processing stage and also
 produces a final event-level dataset for inspection:
@@ -79,12 +79,32 @@ produces a final event-level dataset for inspection:
 results/final_environmental_causal_dataset_2014_plus.csv
 results/final_environmental_causal_dataset_2014_plus_summary.csv
 results/recent_emdat_geocoding/emdat_2014_final_llm70b_review_resolved_v2.csv
+results/release/data/dataset.json
+results/release/images/
+results/release/package_manifest.json
 ```
 
 The complete CSV has one row per event and joins the final position, weather
 summary, news coverage, validated event summary, normalized causal chain, and
 general satellite availability and manifest paths when available. The separate files remain the detailed
 audit/source artifacts for each stage.
+
+The public JSON is a separate intersection: accepted coordinates, valid causal
+steps and existing satellite images. It uses the approved compact schema, with
+`"none"` for missing data, EM-DAT impacts, weather means, URL-only news references
+and causal steps with quotes. Image files are copied into portable category
+directories; no models, downloads or uploads are triggered by the exporter.
+
+```bash
+python src/export_final_event_dataset.py --dry-run
+python src/main.py release --execute --steps release-package --release-limit 1 --release-output-dir results/release_preview
+python src/main.py release --execute --steps release-package
+```
+
+Inspect the real preview before running the complete export. Keep separate
+output directories for previews and full releases; exact interrupted exports
+can be resumed. See [the release schema and cluster instructions](docs/final_release_dataset.md)
+for selection rules, missing values, provenance limitations and image packaging.
 
 Heavy steps have external requirements:
 

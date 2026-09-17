@@ -678,6 +678,35 @@ def build_steps(args: argparse.Namespace) -> List[PipelineStep]:
         )
     )
 
+    package_command = [
+        py, "src/export_final_event_dataset.py",
+        "--geocoding-csv", final_csv, "--causal-csv", args.normalized_causal_csv,
+        "--weather-json", args.weather_json, "--news-json", args.news_json,
+        "--summary-csv", args.validated_summary_csv,
+        "--satellite-dir", args.satellite_output_dir,
+        "--output-dir", args.release_output_dir, "--limit", str(args.release_limit),
+    ]
+    for event_id in args.release_event_id or []:
+        package_command.extend(["--event-id", event_id])
+    if args.release_require_complete:
+        package_command.append("--require-complete")
+    if args.release_allow_missing_context:
+        package_command.append("--allow-missing-context")
+    steps.append(
+        PipelineStep(
+            name="release-package",
+            description="Export the approved JSON intersection and copy its existing satellite images.",
+            commands=[package_command],
+            required_inputs=[final_csv, args.normalized_causal_csv, args.satellite_output_dir] + (
+                [] if args.release_allow_missing_context else
+                [args.weather_json, args.news_json, args.validated_summary_csv]
+            ),
+            expected_outputs=[str(Path(args.release_output_dir) / "data" / "dataset.json"),
+                              str(Path(args.release_output_dir) / "package_manifest.json")],
+            note="Offline export, no uploads; publish only complete packages. Use a separate output directory for previews.",
+        )
+    )
+
     return steps
 
 
@@ -703,6 +732,7 @@ def expand_requested_steps(requested: Iterable[str]) -> List[str]:
             "satellite-input",
             "satellite-general",
             "final-dataset",
+            "release-package",
         ],
         "base": ["base-merge"],
         "geocoding": [
@@ -724,7 +754,7 @@ def expand_requested_steps(requested: Iterable[str]) -> List[str]:
             "causal-type-normalization",
         ],
         "satellite": ["satellite-input", "satellite-general"],
-        "final": ["final-dataset"],
+        "final": ["final-dataset", "release-package"],
     }
     expanded: List[str] = []
     for name in requested:
@@ -924,6 +954,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--satellite-window-days", type=int, default=10)
     parser.add_argument("--satellite-sleep-seconds", type=float, default=2.0)
     parser.add_argument("--final-complete-csv", default=DEFAULT_FINAL_COMPLETE_CSV)
+    parser.add_argument("--release-output-dir", default="results/release")
+    parser.add_argument("--release-limit", type=int, default=0)
+    parser.add_argument("--release-event-id", action="append")
+    parser.add_argument("--release-require-complete", action="store_true")
+    parser.add_argument("--release-allow-missing-context", action="store_true")
     parser.add_argument(
         "--final-complete-summary-csv",
         default=DEFAULT_FINAL_COMPLETE_SUMMARY_CSV,
