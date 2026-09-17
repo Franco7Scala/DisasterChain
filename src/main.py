@@ -3,6 +3,7 @@ import os
 import sys
 from datetime import datetime, timedelta
 from support.constants import *
+from support.weather_data import normalize_daily, weather_number
 
 def fetch_weather_data(api_parameters, disaster_id, row_index, max_retries=0):
     """
@@ -14,13 +15,21 @@ def fetch_weather_data(api_parameters, disaster_id, row_index, max_retries=0):
         try:
             response = requests.get(
                 OPEN_METEO_ARCHIVE_URL,
-                params=api_parameters,
+                params={**api_parameters, "temperature_unit": "celsius", "precipitation_unit": "mm"},
                 timeout=30
             )
 
             if response.status_code == 200:
                 json_data = response.json()
-                return json_data.get("daily")
+                daily = normalize_daily(
+                    json_data.get("daily"), api_parameters, provider="Open-Meteo",
+                    units=json_data.get("daily_units") or {},
+                    time_basis=json_data.get("timezone"),
+                )
+                if daily is not None:
+                    return daily
+                print(f"Warning [{disaster_id}]: Open-Meteo returned no usable daily measurements.")
+                return fetch_nasa_power_weather_data(api_parameters, disaster_id, row_index)
 
             if response.status_code in WEATHER_RETRY_STATUS_CODES and attempt < max_retries:
                 wait_seconds = 5 * (attempt + 1)
@@ -72,7 +81,8 @@ def fetch_nasa_power_weather_data(api_parameters, disaster_id, row_index):
         "latitude": api_parameters["latitude"],
         "start": start,
         "end": end,
-        "format": "JSON"
+        "format": "JSON",
+        "time-standard": "LST",
     }
 
     try:
@@ -84,7 +94,9 @@ def fetch_nasa_power_weather_data(api_parameters, disaster_id, row_index):
             )
             return None
 
-        parameters = response.json().get("properties", {}).get("parameter", {})
+        payload = response.json()
+        parameters = payload.get("properties", {}).get("parameter", {})
+        fill_value = weather_number((payload.get("header") or {}).get("fill_value"))
         rainfall = parameters.get("PRECTOTCORR", {})
         temp_max = parameters.get("T2M_MAX", {})
         temp_min = parameters.get("T2M_MIN", {})
@@ -101,19 +113,23 @@ def fetch_nasa_power_weather_data(api_parameters, disaster_id, row_index):
         while current <= end_dt:
             key = current.strftime("%Y%m%d")
             times.append(current.strftime("%Y-%m-%d"))
-            rain_values.append(float(rainfall.get(key, 0.0)))
-            temp_max_values.append(float(temp_max.get(key, 0.0)))
-            temp_min_values.append(float(temp_min.get(key, 0.0)))
+            rain_values.append(rainfall.get(key))
+            temp_max_values.append(temp_max.get(key))
+            temp_min_values.append(temp_min.get(key))
             current += timedelta(days=1)
 
-        print(f"LOG [{disaster_id}]: NASA POWER fallback succeeded.")
-        return {
+        daily = normalize_daily({
             "time": times,
-            "rain_sum": rain_values,
-            "snowfall_sum": [0.0] * len(times),
+            "precipitation_sum": rain_values,
             "temperature_2m_max": temp_max_values,
             "temperature_2m_min": temp_min_values
-        }
+        }, api_parameters, provider="NASA POWER",
+            units={"precipitation_sum": "mm/day", "temperature_2m_max": "degC", "temperature_2m_min": "degC"},
+            time_basis="local_solar_time", fill_value=fill_value)
+        # Total precipitation is not interchangeable with rain-only or snowfall measurements.
+        if daily is not None:
+            print(f"LOG [{disaster_id}]: NASA POWER fallback returned partial weather data.")
+        return daily
 
     except Exception as e:
         print(f"Unexpected NASA POWER error at row {row_index} (ID: {disaster_id}): {e}")

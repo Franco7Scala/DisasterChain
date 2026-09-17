@@ -77,12 +77,16 @@ def compatible_context(record, row, start, *, coordinates=False):
 
 
 # Builds the requested intersection and an explicit reason for every excluded event.
-def build_export(args, progress=None):
+def build_export(args, progress=None, *, selection_only=False):
     paths = {name: project_path(getattr(args, name)) for name in
              ("geocoding_csv", "causal_csv", "weather_json", "news_json", "summary_csv")}
     fingerprints = {}
     inputs = {}
     for name, path in paths.items():
+        if selection_only and name in {"weather_json", "news_json", "summary_csv"}:
+            inputs[name] = {}
+            fingerprints[name] = "none"
+            continue
         if not path.exists() and args.allow_missing_context and name in {"weather_json", "news_json", "summary_csv"}:
             inputs[name] = {}
             fingerprints[name] = "none"
@@ -133,6 +137,9 @@ def build_export(args, progress=None):
                     status = "satellite_rejected: " + str(exc)
         audit.append({"event_id": event_id, "selection_status": status})
         if status != "selected":
+            continue
+        if selection_only:
+            output[event_id] = event_fields(event_id, row, start)
             continue
         notes = []
         context = {}

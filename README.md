@@ -106,6 +106,20 @@ output directories for previews and full releases; exact interrupted exports
 can be resumed. See [the release schema and cluster instructions](docs/final_release_dataset.md)
 for selection rules, missing values, provenance limitations and image packaging.
 
+If the release inputs have no compatible weather yet, retrieve it only for the
+already exportable coordinate/chain/image intersection:
+
+```bash
+python src/fetch_weather_batch.py --release-events-only --dry-run
+python src/main.py release --execute --steps weather --weather-release-events-only --weather-sleep-seconds 3
+```
+
+This targeted mode requires existing causal chains and satellite manifests and
+does not rerun them. The ordinary `all` pipeline still collects weather for all
+accepted geocoded events. Weather v2 preserves missing values, source/units and
+per-variable daily coverage, resumes successful compatible records, and retries
+failures. Use the standalone `--retry-partial` option to retry incomplete series.
+
 Heavy steps have external requirements:
 
 - `gadm-download` downloads GADM files used for administrative fallback.

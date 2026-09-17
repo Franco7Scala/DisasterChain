@@ -416,9 +416,17 @@ def build_steps(args: argparse.Namespace) -> List[PipelineStep]:
             ],
             required_inputs=[final_csv],
             expected_outputs=[args.weather_json, args.weather_progress_csv],
-            note="Uses Open-Meteo first and NASA POWER as fallback.",
+            note=("Requires existing causal chains and satellite manifests; no other stage is rerun."
+                  if args.weather_release_events_only else "Uses Open-Meteo first and NASA POWER as fallback."),
         )
     )
+    if args.weather_release_events_only:
+        weather_step = steps[-1]
+        weather_step.commands[0].extend([
+            "--release-events-only", "--causal-csv", args.normalized_causal_csv,
+            "--satellite-dir", args.satellite_output_dir,
+        ])
+        weather_step.required_inputs.extend([args.normalized_causal_csv, args.satellite_output_dir])
 
     steps.append(
         PipelineStep(
@@ -900,6 +908,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--review-audit-csv", default=DEFAULT_REVIEW_AUDIT_CSV)
     parser.add_argument("--review-summary-csv", default=DEFAULT_REVIEW_SUMMARY_CSV)
     parser.add_argument("--weather-json", default=DEFAULT_WEATHER_JSON)
+    parser.add_argument("--weather-release-events-only", action="store_true",
+                        help="Collect weather only for already exportable coordinate/chain/image events")
     parser.add_argument("--weather-progress-csv", default=DEFAULT_WEATHER_PROGRESS_CSV)
     parser.add_argument("--weather-limit", type=int, default=0)
     parser.add_argument("--weather-sleep-seconds", type=float, default=0.2)

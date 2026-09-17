@@ -83,6 +83,18 @@ values are preserved, not silently reinterpreted. If a record explicitly names
 NASA as provider, unsupported snowfall is exported as `"none"`. These legacy
 limitations require source review before interpreting the data scientifically.
 
+New weather batch v2 records retain provider, units and time basis; unavailable
+values stay missing and pre/post aggregates report their valid-day counts.
+The NASA fallback keeps corrected total precipitation as `precipitation_sum` in
+the internal checkpoint, not as `rain_sum`: it cannot supply separate rain-only
+and snowfall measurements. Those fields remain `"none"` in this public schema,
+while valid fallback temperature extrema can still be exported. No provider
+mixing is used to fill gaps. Open-Meteo days use its reported timezone; NASA
+fallback days use explicitly requested local solar time, recorded in the source
+checkpoint. The two daily time conventions should not be treated as identical.
+See the [Open-Meteo variable definitions](https://open-meteo.com/en/docs/historical-weather-api)
+and [NASA POWER daily API](https://power.larc.nasa.gov/docs/services/api/temporal/daily/).
+
 ### Satellite
 
 Products are `sentinel_2_rgb`, `sentinel_2_false_color`, `sentinel_2_raw_bands`,
@@ -135,6 +147,33 @@ First check the full selection without copying or writing anything:
 ```bash
 python src/export_final_event_dataset.py --dry-run
 ```
+
+If the default weather file is absent or incompatible with the final events,
+the following targeted mode checks only coordinates, causal chains and images,
+without requiring weather/news/summary input files:
+
+```bash
+python src/fetch_weather_batch.py --release-events-only --dry-run
+python src/fetch_weather_batch.py --release-events-only --limit 3 --sleep-seconds 3
+python -u src/main.py release --execute --steps weather --weather-release-events-only --weather-sleep-seconds 3
+```
+
+The first command writes nothing; the second downloads a three-event smoke
+test; the third resumes the same checkpoint for the full eligible intersection.
+Do not run the second and third simultaneously. Weather files are written to
+`results/weather/weather_2014_plus.json` and its progress CSV, not the historical
+combined news/weather JSON. The full default pipeline remains unchanged in
+scope; this flag is for an existing dataset whose causal/satellite work is done.
+
+`fetched` means all four variables have 21 finite daily values; `partial` means
+some values are available and `failed` means none are usable. These are retrieval
+coverage states, not claims of independent scientific validation. Same-version
+compatible `fetched`/`partial` records are reused; failed records retry on the
+next run. Standalone `--retry-partial` retries incomplete series too. A retry
+that loses coverage preserves the prior compatible record instead of mixing
+providers. A version/date/coordinate change invalidates reuse. Checkpoints use
+atomic replacement and a lock; corrupt checkpoints fail visibly rather than
+being silently replaced. Internal missing values become `"none"` at final export.
 
 Create a real, automatically selected one-event preview in its own directory:
 
