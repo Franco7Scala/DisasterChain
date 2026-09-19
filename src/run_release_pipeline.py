@@ -704,6 +704,8 @@ def build_steps(args: argparse.Namespace) -> List[PipelineStep]:
         package_command.append("--refresh-metadata")
     if args.release_recover_tokens:
         package_command.append("--recover-tokens")
+    if args.release_archive_jupyter_checkpoints:
+        package_command.append("--archive-jupyter-checkpoints")
     steps.append(
         PipelineStep(
             name="release-package",
@@ -977,6 +979,8 @@ def parse_args() -> argparse.Namespace:
                         help="Refresh an existing public package without copying its unchanged images")
     parser.add_argument("--release-recover-tokens", action="store_true",
                         help="Recover saved-text token counts without loading models or making LLM calls")
+    parser.add_argument("--release-archive-jupyter-checkpoints", action="store_true",
+                        help="Preserve Jupyter checkpoint folders outside the final public package")
     parser.add_argument(
         "--final-complete-summary-csv",
         default=DEFAULT_FINAL_COMPLETE_SUMMARY_CSV,

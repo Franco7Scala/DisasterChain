@@ -207,6 +207,50 @@ def copy_asset(asset, target, expected_hash, staging_dir):
             temporary.unlink(missing_ok=True)
 
 
+# Recognizes only Jupyter checkpoint copies of files belonging to this package.
+def check_package_files(destination, allowed, *, allow_checkpoints=False):
+    checkpoints = set()
+    for path in destination.rglob("*") if destination.exists() else []:
+        relative = path.relative_to(destination)
+        if path.is_symlink() or getattr(path, "is_junction", lambda: False)():
+            raise ValueError(f"Unexpected link in release directory: {path}")
+        if ".ipynb_checkpoints" in relative.parts:
+            if relative.parts.count(".ipynb_checkpoints") != 1:
+                raise ValueError(f"Unexpected nested checkpoint directory: {path}")
+            if path.is_dir() and path.name == ".ipynb_checkpoints":
+                checkpoints.add(path)
+                continue
+            if path.is_file() and path.parent.name == ".ipynb_checkpoints" and path.stem.endswith("-checkpoint"):
+                original = relative.parent.parent / (path.stem.removesuffix("-checkpoint") + path.suffix)
+                if original.as_posix() in allowed:
+                    continue
+            raise ValueError(f"Unexpected file in Jupyter checkpoint directory: {path}")
+        if not path.is_dir() and (not path.is_file() or relative.as_posix() not in allowed):
+            raise ValueError(f"Unexpected file in release directory: {path}")
+    if checkpoints and not allow_checkpoints:
+        raise ValueError("Jupyter checkpoints found in the release directory; close the JSON editor tabs and "
+                         "rerun with --archive-jupyter-checkpoints to preserve them outside the package")
+    return sorted(checkpoints)
+
+
+# Moves validated checkpoint folders to a unique sibling backup without deleting files.
+def archive_jupyter_checkpoints(destination, allowed, *, enabled=False):
+    checkpoints = check_package_files(destination, allowed, allow_checkpoints=enabled)
+    if not checkpoints:
+        return []
+    backup = Path(tempfile.mkdtemp(prefix=destination.name + "_jupyter_checkpoints_", dir=destination.parent)).resolve()
+    for source in checkpoints:
+        target = backup / source.relative_to(destination)
+        target.parent.mkdir(parents=True, exist_ok=True)
+        if (not source.resolve().is_relative_to(destination) or not target.resolve().is_relative_to(backup)
+                or backup.parent != destination.parent or source.is_symlink()
+                or getattr(source, "is_junction", lambda: False)() or target.exists()):
+            raise ValueError(f"Unsafe checkpoint archive path: {source}")
+        source.rename(target)
+    print(f"Archived {len(checkpoints)} Jupyter checkpoint folder(s): {backup}", flush=True)
+    return [str(backup)]
+
+
 # Packages selected files or explicitly refreshes metadata while retaining identical images.
 def write_package(args, result):
     output, assets, audit, warnings, paths, fingerprints, manifests = result
@@ -219,6 +263,14 @@ def write_package(args, result):
     with lock:
         if destination.exists() and destination.stat().st_dev != destination.parent.stat().st_dev:
             raise ValueError("Use a release subdirectory on the same filesystem as its parent")
+        manifest_path = destination / "package_manifest.json"
+        refresh = args.refresh_metadata
+        if refresh and not manifest_path.is_file():
+            raise ValueError("Metadata refresh requires an existing managed package")
+        if destination.exists() and any(destination.iterdir()) and not manifest_path.is_file():
+            raise ValueError("Non-empty unmanaged release directory; choose a new --output-dir")
+        allowed = {asset.destination for asset in assets} | {"data/dataset.json", "package_manifest.json", "README.md"}
+        check_package_files(destination, allowed, allow_checkpoints=args.archive_jupyter_checkpoints)
         dataset = json_bytes(output)
         print(f"Checking {len(assets)} source files before packaging...", flush=True)
         entries = [{"path": asset.destination, "bytes": asset.size, "sha256": file_hash(asset.source)}
@@ -227,13 +279,7 @@ def write_package(args, result):
                 "event_count": len(output), "require_complete": args.require_complete,
                 "dataset_path": "data/dataset.json", "dataset_sha256": hashlib.sha256(dataset).hexdigest(),
                 "input_sha256": fingerprints, "assets": entries}
-        manifest_path = destination / "package_manifest.json"
-        refresh = args.refresh_metadata
-        if refresh and not manifest_path.is_file():
-            raise ValueError("Metadata refresh requires an existing managed package")
         if destination.exists() and any(destination.iterdir()):
-            if not manifest_path.is_file():
-                raise ValueError("Non-empty unmanaged release directory; choose a new --output-dir")
             previous = read_json(manifest_path)
             previous_status = previous.pop("status", None)
             if previous != plan:
@@ -248,16 +294,13 @@ def write_package(args, result):
                 saved_dataset = destination / "data" / "dataset.json"
                 if not saved_dataset.is_file() or file_hash(saved_dataset) != previous["dataset_sha256"]:
                     raise ValueError("Existing dataset differs from its manifest; metadata refresh refused")
-        allowed = {entry["path"] for entry in entries} | {"data/dataset.json", "package_manifest.json", "README.md"}
-        for path in destination.rglob("*") if destination.exists() else []:
-            if path.is_symlink() or path.is_file() and path.relative_to(destination).as_posix() not in allowed:
-                raise ValueError(f"Unexpected file in release directory: {path}")
         if refresh and any(not (destination / entry["path"]).is_file() for entry in entries):
             raise ValueError("Metadata refresh cannot restore missing images; resume the original export first")
         needed = sum(asset.size for asset in assets if not (destination / asset.destination).exists())
         temporary_image_size = 0 if refresh else max((asset.size for asset in assets), default=0)
         if shutil.disk_usage(destination.parent).free < needed + len(dataset) + temporary_image_size:
             raise ValueError("Not enough free disk space to copy the release images")
+        checkpoint_backups = archive_jupyter_checkpoints(destination, allowed, enabled=args.archive_jupyter_checkpoints)
         atomic_write(manifest_path, json_bytes({**plan, "status": "incomplete"}), destination.parent)
         for index, (asset, entry) in enumerate(zip(assets, entries), start=1):
             target = destination / asset.destination
@@ -274,6 +317,7 @@ def write_package(args, result):
         for path, digest in manifests.items():
             if file_hash(path) != digest:
                 raise ValueError(f"Satellite manifest changed during export: {path}")
+        checkpoint_backups.extend(archive_jupyter_checkpoints(destination, allowed, enabled=args.archive_jupyter_checkpoints))
         documentation = (PROJECT_ROOT / "docs" / "final_release_dataset.md").read_bytes()
         atomic_write(destination / "README.md", documentation, destination.parent)
         atomic_write(destination / "data" / "dataset.json", dataset, destination.parent)
@@ -281,6 +325,7 @@ def write_package(args, result):
         report = {"schema_version": SCHEMA_VERSION, "exported_events": len(output),
                   "selection_counts": dict(Counter(row["selection_status"] for row in audit)),
                   "image_files": len(assets), "image_bytes": sum(asset.size for asset in assets),
+                  "jupyter_checkpoint_backups": checkpoint_backups,
                   "warnings": warnings}
         atomic_write(destination.parent / (destination.name + "_export_report.json"), json_bytes(report))
         stream = io.StringIO(newline="")
@@ -307,6 +352,8 @@ def parse_args(argv=None):
                         help="Update JSON and documentation in an existing package with unchanged inputs and images")
     parser.add_argument("--recover-tokens", action="store_true",
                         help="Recount saved text with cached tokenizers and report separate character estimates when needed")
+    parser.add_argument("--archive-jupyter-checkpoints", action="store_true",
+                        help="Move recognized Jupyter checkpoint folders to a sibling backup before publishing")
     parser.add_argument("--dry-run", action="store_true", help="Check the real inputs without writing or copying files")
     args = parser.parse_args(argv)
     if args.limit < 0:

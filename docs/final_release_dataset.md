@@ -288,6 +288,28 @@ An interrupted refresh is marked incomplete and resumes with the same command.
 No LLM or retrieval jobs are rerun; hash verification can still take time on a
 large image collection.
 
+Jupyter may create `.ipynb_checkpoints` folders when the JSON or manifest is
+opened in its editor. These are not publication assets. Close those editor tabs
+and explicitly archive recognized checkpoints outside the package:
+
+```bash
+python -u src/main.py release --execute --steps release-package \
+  --release-refresh-metadata --release-recover-tokens \
+  --release-archive-jupyter-checkpoints
+```
+
+The standalone flag is `--archive-jupyter-checkpoints`. It moves checkpoint
+folders into a unique sibling directory named `release_jupyter_checkpoints_*`,
+preserving their contents and relative paths without deleting or copying images.
+Only standard `name-checkpoint.ext` copies of expected package files qualify;
+unknown files, links and nested checkpoint contents still stop the export.
+The destination is printed and recorded in the external export report for that
+run. Backups from interrupted or earlier runs remain untouched. Do not publish
+these backup directories. File inventory checks run before source image hashing
+and again before completion; no files are moved during a dry run. Avoid opening
+package files in Jupyter until the export finishes, and exclude any checkpoints
+Jupyter creates later when uploading the package.
+
 Do not manually add unrelated images to the managed release folder.
 Temporary copies are staged beside the release directory, on the same
 filesystem, not inside the public image tree. A hard process termination can

@@ -587,6 +587,129 @@ class PackageTests(unittest.TestCase):
             export.write_package(self.args, export.build_export(self.args))
         self.assertFalse(Path(self.args.output_dir).exists())
 
+    def checkpoint(self, destination, original="package_manifest.json", content=b"saved checkpoint"):
+        original = Path(original)
+        path = destination / original.parent / ".ipynb_checkpoints" / (original.stem + "-checkpoint" + original.suffix)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(content)
+        return path
+
+    def test_checkpoints_fail_before_hashing_images_without_explicit_flag(self):
+        result, destination, _ = self.old_package()
+        checkpoint = self.checkpoint(destination)
+        with patch.object(export, "file_hash", side_effect=AssertionError("Should fail before hashing")):
+            with self.assertRaisesRegex(ValueError, "--archive-jupyter-checkpoints"):
+                export.write_package(self.args, result)
+        self.assertEqual(checkpoint.read_bytes(), b"saved checkpoint")
+
+    def test_checkpoints_are_preserved_outside_package_without_copying_images(self):
+        result, destination, old = self.old_package()
+        image_path = old["assets"][0]["path"]
+        original_image = (destination / image_path).stat().st_mtime_ns
+        checkpoints = [self.checkpoint(destination, path, content=path.encode())
+                       for path in ("package_manifest.json", "data/dataset.json", image_path)]
+        self.args.refresh_metadata = True
+        self.args.archive_jupyter_checkpoints = True
+        with patch.object(export, "copy_asset", side_effect=AssertionError("No image copies")), redirect_stdout(io.StringIO()):
+            export.write_package(self.args, result)
+        backups = list(self.root.glob("release_jupyter_checkpoints_*"))
+        self.assertEqual(len(backups), 1)
+        for checkpoint in checkpoints:
+            self.assertFalse(checkpoint.exists())
+            archived = backups[0] / checkpoint.relative_to(destination)
+            self.assertTrue(archived.is_file())
+        self.assertEqual((backups[0] / ".ipynb_checkpoints/package_manifest-checkpoint.json").read_bytes(), b"package_manifest.json")
+        self.assertFalse(list(destination.rglob(".ipynb_checkpoints")))
+        self.assertEqual((destination / image_path).stat().st_mtime_ns, original_image)
+        self.assertEqual(records.read_json(destination / "package_manifest.json")["status"], "complete")
+        report = records.read_json(self.root / "release_export_report.json")
+        self.assertEqual(report["jupyter_checkpoint_backups"], [str(backups[0])])
+        with redirect_stdout(io.StringIO()):
+            export.write_package(self.args, result)
+        self.assertEqual(list(self.root.glob("release_jupyter_checkpoints_*")), backups)
+
+    def test_archive_flag_does_not_hide_unexpected_files_or_move_checkpoints_on_failure(self):
+        result, destination, _ = self.old_package()
+        checkpoint = self.checkpoint(destination)
+        self.args.archive_jupyter_checkpoints = True
+        for relative in ("notes.txt", ".ipynb_checkpoints/secret-checkpoint.json", ".ipynb_checkpoints/data/nested.json"):
+            with self.subTest(relative=relative):
+                unexpected = destination / relative
+                unexpected.parent.mkdir(parents=True, exist_ok=True)
+                unexpected.write_text("preserve user data")
+                with patch.object(export, "file_hash", side_effect=AssertionError("No hashing")):
+                    with self.assertRaisesRegex(ValueError, "Unexpected"):
+                        export.write_package(self.args, result)
+                self.assertTrue(checkpoint.is_file())
+                self.assertEqual(unexpected.read_text(), "preserve user data")
+                self.assertFalse(list(self.root.glob("release_jupyter_checkpoints_*")))
+                unexpected.unlink()
+
+    def test_checkpoint_links_are_rejected_not_archived(self):
+        result, destination, _ = self.old_package()
+        checkpoint = self.checkpoint(destination)
+        self.args.archive_jupyter_checkpoints = True
+        original = Path.is_symlink
+        with patch.object(Path, "is_symlink", autospec=True, side_effect=lambda path: path == checkpoint or original(path)):
+            with self.assertRaisesRegex(ValueError, "Unexpected link"):
+                export.write_package(self.args, result)
+        self.assertTrue(checkpoint.exists())
+        self.assertFalse(list(self.root.glob("release_jupyter_checkpoints_*")))
+
+    def test_changed_export_plan_does_not_archive_checkpoints(self):
+        result, destination, _ = self.old_package()
+        checkpoint = self.checkpoint(destination)
+        self.args.refresh_metadata = True
+        self.args.archive_jupyter_checkpoints = True
+        self.args.require_complete = True
+        with redirect_stdout(io.StringIO()), self.assertRaisesRegex(ValueError, "changed"):
+            export.write_package(self.args, result)
+        self.assertTrue(checkpoint.exists())
+        self.assertFalse(list(self.root.glob("release_jupyter_checkpoints_*")))
+
+    def test_resume_after_archiving_keeps_backup_and_finishes_refresh(self):
+        result, destination, _ = self.old_package()
+        checkpoint = self.checkpoint(destination)
+        self.args.refresh_metadata = True
+        self.args.archive_jupyter_checkpoints = True
+        with patch.object(export, "atomic_write", side_effect=KeyboardInterrupt), redirect_stdout(io.StringIO()):
+            with self.assertRaises(KeyboardInterrupt):
+                export.write_package(self.args, result)
+        backups = list(self.root.glob("release_jupyter_checkpoints_*"))
+        self.assertEqual(len(backups), 1)
+        archived = backups[0] / checkpoint.relative_to(destination)
+        self.assertEqual(archived.read_bytes(), b"saved checkpoint")
+        with redirect_stdout(io.StringIO()):
+            export.write_package(self.args, result)
+        self.assertEqual(records.read_json(destination / "package_manifest.json")["status"], "complete")
+        self.assertEqual(archived.read_bytes(), b"saved checkpoint")
+
+    def test_checkpoint_created_during_copy_is_archived_before_completion(self):
+        result = export.build_export(self.args)
+        destination = Path(self.args.output_dir)
+        self.args.archive_jupyter_checkpoints = True
+        original = export.copy_asset
+
+        def copy_with_checkpoint(*args):
+            original(*args)
+            self.checkpoint(destination, "data/dataset.json")
+
+        with patch.object(export, "copy_asset", side_effect=copy_with_checkpoint), redirect_stdout(io.StringIO()):
+            export.write_package(self.args, result)
+        self.assertFalse(list(destination.rglob(".ipynb_checkpoints")))
+        self.assertEqual(records.read_json(destination / "package_manifest.json")["status"], "complete")
+        self.assertEqual(len(list(self.root.glob("release_jupyter_checkpoints_*"))), 1)
+
+    def test_dry_run_with_archive_flag_does_not_move_checkpoints(self):
+        _, destination, _ = self.old_package()
+        checkpoint = self.checkpoint(destination)
+        self.args.archive_jupyter_checkpoints = True
+        self.args.dry_run = True
+        with patch.object(export, "parse_args", return_value=self.args), redirect_stdout(io.StringIO()):
+            export.main()
+        self.assertTrue(checkpoint.exists())
+        self.assertFalse(list(self.root.glob("release_jupyter_checkpoints_*")))
+
 
 class ReleaseIntegrationTests(unittest.TestCase):
     def test_final_and_all_include_package_without_changing_csv_step(self):
@@ -602,14 +725,17 @@ class ReleaseIntegrationTests(unittest.TestCase):
         self.assertEqual(command[command.index("--output-dir") + 1], "results/preview")
         self.assertIn(args.weather_json, package.required_inputs)
         self.assertNotIn("--refresh-metadata", command)
+        self.assertNotIn("--archive-jupyter-checkpoints", command)
 
     def test_release_forwards_explicit_metadata_refresh(self):
-        with patch.object(sys, "argv", ["release", "--release-refresh-metadata", "--release-recover-tokens"]):
+        with patch.object(sys, "argv", ["release", "--release-refresh-metadata", "--release-recover-tokens",
+                                      "--release-archive-jupyter-checkpoints"]):
             args = release.parse_args()
         steps = release.build_steps(args)
         package = next(step for step in steps if step.name == "release-package")
         self.assertIn("--refresh-metadata", package.commands[0])
         self.assertIn("--recover-tokens", package.commands[0])
+        self.assertIn("--archive-jupyter-checkpoints", package.commands[0])
 
 
 if __name__ == "__main__":
