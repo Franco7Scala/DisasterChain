@@ -101,6 +101,20 @@ python src/main.py release --execute --steps release-package --release-limit 1 -
 python src/main.py release --execute --steps release-package
 ```
 
+For an existing package built from unchanged inputs, refresh the final JSON
+schema and documentation without recopying images:
+
+```bash
+python src/main.py release --execute --steps release-package --release-refresh-metadata --release-recover-tokens
+```
+
+Schema v2 uses a single weather `valid_days` count and centralizes news metrics
+under `news_data.search_metadata`; summary and causal blocks retain their text
+or steps and LLM execution metadata. Token recovery uses cached tokenizers on
+saved prompts/raw responses without loading models; rough character estimates
+are separate and explicitly scoped when full usage cannot be reconstructed.
+Future summary/causal runs save actual token counts directly.
+
 Inspect the real preview before running the complete export. Keep separate
 output directories for previews and full releases; exact interrupted exports
 can be resumed. See [the release schema and cluster instructions](docs/final_release_dataset.md)

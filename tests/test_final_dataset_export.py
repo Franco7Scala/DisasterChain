@@ -122,11 +122,30 @@ class RecordTests(unittest.TestCase):
         source = weather_record()
         source["weather_data"]["daily_series"]["rain_sum"][10] = 10000
         source["weather_data"]["daily_series"]["temperature_2m_max"][0] = -999
-        result = records.weather_fields(source, START, [])
+        notes = []
+        result = records.weather_fields(source, START, notes)
         self.assertEqual(result["pre_event_summary"]["mean_daily_rainfall_mm"], 4.5)
         self.assertEqual(result["post_event_summary"]["mean_daily_rainfall_mm"], 15.5)
-        self.assertEqual(result["pre_event_summary"]["valid_days"]["temperature_2m_max"], 9)
+        self.assertEqual(result["pre_event_summary"]["mean_daily_max_temperature_c"], 30)
+        self.assertIsNone(result["pre_event_summary"]["valid_days"])
+        self.assertEqual(result["post_event_summary"]["valid_days"], 10)
+        self.assertIn('"temperature_2m_max": 9', notes[0])
+        self.assertIn("weather_valid_days_differ:pre_event_summary:", notes[0])
         self.assertEqual(result["daily_20_days_series"][10]["date"], START.isoformat())
+
+    def test_valid_days_is_a_common_scalar_including_zero(self):
+        for count in (10, 9, 0):
+            with self.subTest(count=count):
+                source = weather_record()
+                for field in records.WEATHER_FIELDS:
+                    source["weather_data"]["daily_series"][field][:10 - count] = [None] * (10 - count)
+                notes = []
+                result = records.public_values(records.weather_fields(source, START, notes))
+                self.assertEqual(result["pre_event_summary"]["valid_days"], count)
+                self.assertEqual(result["post_event_summary"]["valid_days"], 10)
+                self.assertEqual(notes, [])
+                if count == 0:
+                    self.assertEqual(result["pre_event_summary"]["mean_daily_rainfall_mm"], "none")
 
     def test_weather_dates_are_aligned_and_fill_values_do_not_become_zero(self):
         source = weather_record()
@@ -138,7 +157,7 @@ class RecordTests(unittest.TestCase):
         self.assertEqual(len(output["daily_20_days_series"]), 21)
         self.assertEqual(output["daily_20_days_series"][0]["rain_sum"], "none")
         self.assertEqual(output["daily_20_days_series"][1]["rain_sum"], "none")
-        self.assertEqual(output["pre_event_summary"]["valid_days"]["rain_sum"], 8)
+        self.assertEqual(output["pre_event_summary"]["valid_days"], "none")
 
     def test_legacy_provider_warning_and_explicit_nasa_snow(self):
         record = weather_record()
@@ -185,11 +204,60 @@ class RecordTests(unittest.TestCase):
         self.assertNotIn("private_extra", json.dumps(result))
         self.assertNotIn("total_causal_chain", result)
 
-    def test_summary_only_four_fields_and_rejected_text_not_published(self):
+    def test_summary_retains_execution_metadata_not_news_metrics(self):
         notes = []
-        result = records.public_values(records.summary_fields({"event_summary": "unapproved"}, notes))
-        self.assertEqual(set(result), {"usable_news", "total_chars", "news_input_quality", "event_summary"})
+        row = {"event_summary": "unapproved", "summary_validation_status": "rejected_unrelated_news_admission",
+               "llm_call_status": "called", "model_name": "saved-model", "summary_prompt_version": "v5",
+               "usable_news_count": 2, "news_total_chars": 500, "news_input_quality": "limited"}
+        result = records.public_values(records.summary_fields(row, notes))
+        self.assertEqual(set(result), {"event_summary", "model_name", "llm_call_status",
+                                      "summary_prompt_version", "summary_validation_status", "token_usage"})
         self.assertEqual(result["event_summary"], "none")
+        for key in records.SUMMARY_TEXT:
+            self.assertEqual(result[key], row[key])
+        self.assertIn("accepted_summary_unavailable", notes)
+
+    def test_news_metrics_centralized_without_merging_different_model_inputs(self):
+        summary = {"news_count": "5", "summary_relevant_news_count": "4", "news_rejected_for_summary": "1",
+                   "selected_news_count": "3", "usable_news_count": "2", "news_sources_count": "2",
+                   "news_total_chars": "500", "news_input_quality": "limited"}
+        causal = {**causal_row(), "news_count": "5", "causal_relevant_news_count": "2",
+                  "news_rejected_for_causal_chain": "3", "selected_news_count": "2", "usable_news_count": "1",
+                  "news_sources_count": "1", "news_total_chars": "250", "news_input_quality": "limited"}
+        metadata = records.news_fields(news_record(), [], summary_row=summary, causal_row=causal)["search_metadata"]
+        for stage, row, relevant, rejected in (("summary_input", summary, 4, 1), ("causal_chain_input", causal, 2, 3)):
+            for key in records.NEWS_NUMBERS:
+                self.assertEqual(metadata[stage][key], int(row[key]))
+            self.assertEqual(metadata[stage]["relevant_news_count"], relevant)
+            self.assertEqual(metadata[stage]["rejected_news_count"], rejected)
+            self.assertEqual(metadata[stage]["news_input_quality"], row["news_input_quality"])
+        for block in (records.causal_fields(causal), records.summary_fields(summary, [])):
+            self.assertFalse(set(block) & (set(records.NEWS_NUMBERS) | {
+                "causal_relevant_news_count", "news_rejected_for_causal_chain", "summary_relevant_news_count",
+                "news_rejected_for_summary", "news_input_quality", "usable_news", "total_chars"}))
+
+    def test_missing_articles_do_not_discard_saved_model_input_metrics(self):
+        notes = []
+        output = records.public_values(records.news_fields(None, notes, summary_row={"usable_news_count": 0}))
+        metadata = output["search_metadata"]
+        self.assertEqual(metadata["total_articles_retrieved"], "none")
+        self.assertEqual(metadata["filtered_final_articles"], "none")
+        self.assertEqual(metadata["causal_chain_input"], "none")
+        self.assertEqual(metadata["summary_input"]["usable_news_count"], 0)
+        self.assertEqual(metadata["summary_input"]["news_total_chars"], "none")
+        self.assertIn("news_unavailable", notes)
+        self.assertIsNone(records.news_fields(None, []))
+
+    def test_token_usage_is_saved_only_not_estimated_or_imputed(self):
+        row = {**causal_row(), "input_tokens": "100", "output_tokens": "0", "total_tokens": "100"}
+        for builder in (records.causal_fields, lambda value: records.summary_fields(value, [])):
+            usage = builder(row)["token_usage"]
+            self.assertEqual([usage[key] for key in ("input_tokens", "output_tokens", "total_tokens")], [100, 0, 100])
+            self.assertEqual(usage["input_method"], "recorded")
+            result = records.public_values(builder({**causal_row(), "news_total_chars": 2000, "max_new_tokens": 512}))
+            self.assertEqual(set(result["token_usage"].values()), {"none"})
+        self.assertEqual(set(records.token_usage({"input_tokens": -1, "output_tokens": "NaN", "total_tokens": True}).values()),
+                         {None})
 
     def test_duplicate_csv_and_json_ids_rejected(self):
         with tempfile.TemporaryDirectory() as folder:
@@ -317,6 +385,13 @@ class PackageTests(unittest.TestCase):
         self.assertNotIn("SECRET", json.dumps(dataset))
         self.assertNotIn("null", json.dumps(dataset))
         self.assertNotIn("total_causal_chain", event["causal_chain"])
+        self.assertEqual(event["weather_data"]["pre_event_summary"]["valid_days"], 10)
+        self.assertEqual(event["news_data"]["search_metadata"]["summary_input"]["usable_news_count"], 1)
+        self.assertEqual(event["news_data"]["search_metadata"]["summary_input"]["news_total_chars"], 200)
+        self.assertEqual(event["summary"]["event_summary"], "A saved summary.")
+        self.assertEqual(event["summary"]["summary_validation_status"], "accepted")
+        self.assertNotIn("news_input_quality", event["summary"])
+        self.assertNotIn("news_count", event["causal_chain"])
         manifest = records.read_json(package / "package_manifest.json")
         self.assertEqual(manifest["status"], "complete")
         entry = manifest["assets"][0]
@@ -411,6 +486,107 @@ class PackageTests(unittest.TestCase):
         self.args.limit = 1
         self.assertEqual(list(export.build_export(self.args)[0]), [EVENT])
 
+    def old_package(self):
+        result = export.build_export(self.args)
+        with patch.object(export, "SCHEMA_VERSION", "environmental-causal-release-v1"), redirect_stdout(io.StringIO()):
+            export.write_package(self.args, result)
+        destination = Path(self.args.output_dir)
+        dataset = records.read_json(destination / "data/dataset.json")
+        event = dataset[EVENT]
+        event["weather_data"]["pre_event_summary"]["valid_days"] = dict.fromkeys(records.WEATHER_FIELDS, 10)
+        event["summary"]["usable_news"] = 1
+        (destination / "data/dataset.json").write_bytes(export.json_bytes(dataset))
+        manifest = records.read_json(destination / "package_manifest.json")
+        manifest["dataset_sha256"] = export.file_hash(destination / "data/dataset.json")
+        (destination / "package_manifest.json").write_bytes(export.json_bytes(manifest))
+        return result, destination, manifest
+
+    def test_schema_refresh_is_explicit_and_does_not_copy_images(self):
+        result, destination, old = self.old_package()
+        image = destination / old["assets"][0]["path"]
+        before = image.stat().st_mtime_ns
+        with redirect_stdout(io.StringIO()), self.assertRaisesRegex(ValueError, "refresh-metadata"):
+            export.write_package(self.args, result)
+        self.args.refresh_metadata = True
+        with patch.object(export, "copy_asset", side_effect=AssertionError("Must not copy")), redirect_stdout(io.StringIO()):
+            export.write_package(self.args, result)
+            export.write_package(self.args, result)
+        manifest = records.read_json(destination / "package_manifest.json")
+        self.assertEqual(manifest["schema_version"], export.SCHEMA_VERSION)
+        self.assertEqual(manifest["status"], "complete")
+        self.assertEqual(manifest["assets"], old["assets"])
+        self.assertEqual(manifest["input_sha256"], old["input_sha256"])
+        self.assertEqual(image.stat().st_mtime_ns, before)
+        self.assertEqual(image.read_bytes(), TIFF)
+        self.assertEqual(export.file_hash(destination / "data/dataset.json"), manifest["dataset_sha256"])
+        event = records.read_json(destination / "data/dataset.json")[EVENT]
+        self.assertEqual(event["weather_data"]["pre_event_summary"]["valid_days"], 10)
+        self.assertNotIn("usable_news", event["summary"])
+
+    def test_refresh_cannot_change_selection_inputs_or_assets(self):
+        result, destination, old = self.old_package()
+        self.args.refresh_metadata = True
+        original_manifest = (destination / "package_manifest.json").read_bytes()
+        for field, changed in (("event_ids", ["another-event"]), ("assets", []),
+                               ("input_sha256", {}), ("schema_version", "unknown-schema")):
+            with self.subTest(field=field):
+                altered = {**old, field: changed}
+                (destination / "package_manifest.json").write_bytes(export.json_bytes(altered))
+                with redirect_stdout(io.StringIO()), self.assertRaisesRegex(ValueError, "changed"):
+                    export.write_package(self.args, result)
+        (destination / "package_manifest.json").write_bytes(original_manifest)
+
+    def test_refresh_refuses_manual_json_edits_and_missing_images(self):
+        result, destination, old = self.old_package()
+        self.args.refresh_metadata = True
+        dataset_path = destination / "data/dataset.json"
+        saved = dataset_path.read_bytes()
+        dataset_path.write_bytes(saved + b" ")
+        with redirect_stdout(io.StringIO()), self.assertRaisesRegex(ValueError, "Existing dataset differs"):
+            export.write_package(self.args, result)
+        dataset_path.write_bytes(saved)
+        (destination / old["assets"][0]["path"]).unlink()
+        with redirect_stdout(io.StringIO()), self.assertRaisesRegex(ValueError, "missing images"):
+            export.write_package(self.args, result)
+        self.assertEqual(dataset_path.read_bytes(), saved)
+        self.assertEqual(records.read_json(destination / "package_manifest.json"), old)
+
+    def test_refresh_detects_corrupt_images_without_overwriting_them(self):
+        result, destination, old = self.old_package()
+        self.args.refresh_metadata = True
+        image = destination / old["assets"][0]["path"]
+        image.write_bytes(b"corrupt image")
+        with redirect_stdout(io.StringIO()), self.assertRaisesRegex(ValueError, "Existing asset differs"):
+            export.write_package(self.args, result)
+        self.assertEqual(image.read_bytes(), b"corrupt image")
+        self.assertEqual(records.read_json(destination / "package_manifest.json")["status"], "incomplete")
+        self.assertEqual(export.file_hash(destination / "data/dataset.json"), old["dataset_sha256"])
+
+    def test_interrupted_metadata_refresh_can_resume_without_copying(self):
+        result, destination, old = self.old_package()
+        self.args.refresh_metadata = True
+        original = export.atomic_write
+
+        def interrupt(path, content, staging_dir=None):
+            if path.name == "dataset.json":
+                raise KeyboardInterrupt
+            return original(path, content, staging_dir)
+
+        with patch.object(export, "atomic_write", side_effect=interrupt), redirect_stdout(io.StringIO()):
+            with self.assertRaises(KeyboardInterrupt):
+                export.write_package(self.args, result)
+        self.assertEqual(records.read_json(destination / "package_manifest.json")["status"], "incomplete")
+        self.assertEqual(export.file_hash(destination / "data/dataset.json"), old["dataset_sha256"])
+        with patch.object(export, "copy_asset", side_effect=AssertionError("Must not copy")), redirect_stdout(io.StringIO()):
+            export.write_package(self.args, result)
+        self.assertEqual(records.read_json(destination / "package_manifest.json")["status"], "complete")
+
+    def test_refresh_requires_an_existing_package(self):
+        self.args.refresh_metadata = True
+        with redirect_stdout(io.StringIO()), self.assertRaisesRegex(ValueError, "existing managed package"):
+            export.write_package(self.args, export.build_export(self.args))
+        self.assertFalse(Path(self.args.output_dir).exists())
+
 
 class ReleaseIntegrationTests(unittest.TestCase):
     def test_final_and_all_include_package_without_changing_csv_step(self):
@@ -425,6 +601,15 @@ class ReleaseIntegrationTests(unittest.TestCase):
         self.assertEqual(command[command.index("--limit") + 1], "1")
         self.assertEqual(command[command.index("--output-dir") + 1], "results/preview")
         self.assertIn(args.weather_json, package.required_inputs)
+        self.assertNotIn("--refresh-metadata", command)
+
+    def test_release_forwards_explicit_metadata_refresh(self):
+        with patch.object(sys, "argv", ["release", "--release-refresh-metadata", "--release-recover-tokens"]):
+            args = release.parse_args()
+        steps = release.build_steps(args)
+        package = next(step for step in steps if step.name == "release-package")
+        self.assertIn("--refresh-metadata", package.commands[0])
+        self.assertIn("--recover-tokens", package.commands[0])
 
 
 if __name__ == "__main__":

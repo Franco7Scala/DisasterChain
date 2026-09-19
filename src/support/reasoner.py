@@ -3,8 +3,16 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any, Dict, Optional
 
-
 DEFAULT_REASONER_MODEL = "meta-llama/Llama-3.1-70B-Instruct"
+
+
+# Uses the same chat formatting for generation and later prompt recounts.
+def format_reasoner_prompt(tokenizer, prompt):
+    if getattr(tokenizer, "chat_template", None):
+        return tokenizer.apply_chat_template(
+            [{"role": "user", "content": prompt}], tokenize=False, add_generation_prompt=True,
+        )
+    return prompt
 
 
 @dataclass
@@ -54,6 +62,7 @@ class Reasoner:
         )
         self._tokenizer = None
         self._model = None
+        self.last_token_usage = {}
 
     # Returns the HuggingFace model name configured for this reasoner.
     @property
@@ -68,6 +77,7 @@ class Reasoner:
         max_new_tokens: Optional[int] = None,
         generation_kwargs: Optional[Dict[str, Any]] = None,
     ) -> str:
+        self.last_token_usage = {}
         prompt = str(prompt or "").strip()
         if not prompt:
             raise ValueError("prompt must not be empty")
@@ -96,6 +106,13 @@ class Reasoner:
         output_ids = model.generate(**inputs, **generate_kwargs)
         prompt_length = inputs["input_ids"].shape[-1]
         response_ids = output_ids[0][prompt_length:]
+        self.last_token_usage = {
+            "input_tokens": int(prompt_length), "output_tokens": len(response_ids),
+            "total_tokens": int(prompt_length) + len(response_ids),
+            "token_count_method": "generated_token_ids",
+            "tokenizer_name": self.config.model_name,
+            "tokenizer_revision": getattr(tokenizer, "init_kwargs", {}).get("_commit_hash"),
+        }
         return tokenizer.decode(response_ids, skip_special_tokens=True).strip()
 
     # Loads tokenizer and model lazily to avoid startup cost in dry runs.
@@ -167,12 +184,4 @@ class Reasoner:
 
     # Applies the model chat template when the tokenizer provides one.
     def _format_prompt(self, prompt: str) -> str:
-        tokenizer = self._tokenizer
-        if getattr(tokenizer, "chat_template", None):
-            messages = [{"role": "user", "content": prompt}]
-            return tokenizer.apply_chat_template(
-                messages,
-                tokenize=False,
-                add_generation_prompt=True,
-            )
-        return prompt
+        return format_reasoner_prompt(self._tokenizer, prompt)

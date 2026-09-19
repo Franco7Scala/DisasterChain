@@ -17,6 +17,7 @@ release/
   images/<event_id>/worldcover/worldcover_2020.tif
 ```
 
+The schema version is `environmental-causal-release-v2`.
 `dataset.json` is a dictionary keyed by the country-specific EM-DAT event id.
 Image paths use `/` and are relative to that JSON: `../images/...`.
 `package_manifest.json` records the event ids, input fingerprints and the size
@@ -51,9 +52,9 @@ show disaster damage. Only files referenced by selected manifests are packaged.
 - `total_damage_usd`: original EM-DAT damage in USD; a source column in thousands of USD is multiplied by 1000, not replaced with inflation-adjusted damages.
 - `weather_data`: units, pre/post means and the aligned daily series.
 - `satellite_data`: actual processing bbox/CRS, availability and product paths.
-- `news_data.search_metadata`: successful source groups, counts and filtered final article references.
+- `news_data.search_metadata`: successful source groups, article references and all news coverage metrics, including the separate summary/causal inputs.
 - `causal_chain`: retained step list plus model/version/validation counters; no duplicate total chain, prompt or raw response.
-- `summary`: only `usable_news`, `total_chars`, `news_input_quality`, `event_summary`.
+- `summary`: accepted `event_summary`, model, call/validation status, prompt version and saved token usage; no news coverage metrics or raw response.
 
 Every unavailable scalar or unavailable data block is the string `"none"`, not
 JSON null, NaN, an empty string or a substituted zero. Real numbers stay numeric,
@@ -70,8 +71,13 @@ mean temperatures. The pre-event mean uses indices 0-9 and the post-event mean
 uses 11-20; the event day is excluded from those two aggregates.
 
 Means are recomputed from the daily values, excluding missing values and known
-fill codes. `valid_days` reports the denominator **per variable**. Temperatures
-are degrees Celsius and rainfall is mm under the pipeline's existing defaults.
+fill codes. `valid_days` is a single integer: the common number of daily values
+used for each mean (normally 10). If variables have different counts, there is
+no single denominator: `valid_days` is `"none"`, while the export report records
+each count in a `weather_valid_days_differ` warning. The per-variable means and
+daily observations are preserved unchanged. A known common count of zero stays
+0, with unavailable means set to `"none"`. Temperatures are degrees Celsius and
+rainfall is mm under the pipeline's existing defaults.
 An unknown snowfall unit is `"none"`; units are not invented.
 
 Historical weather records may lack provider/unit metadata. The old NASA POWER
@@ -123,18 +129,71 @@ category cannot be reconstructed is retained as an article and reported in the
 audit, but is not arbitrarily assigned to a group. Group counts can therefore
 sum to less than the total only in these explicitly warned cases.
 
-`summary.total_chars` counts news-context characters, not summary characters.
+All saved news coverage metrics are centralized under `news_data.search_metadata`.
+Its `summary_input` and `causal_chain_input` blocks preserve the respective model
+inputs; their values can differ because selection/filtering limits differ.
+Neither block recomputes coverage from the public article references:
+
+- `news_count`: articles available before that stage's filtering.
+- `relevant_news_count`, `rejected_news_count`: that stage's relevance filter counts, mapped from the summary/causal-specific source columns.
+- `selected_news_count`, `usable_news_count`: articles selected and actually usable in that stage's context.
+- `news_sources_count`: sources represented in the context.
+- `news_total_chars`: news-context characters, not generated text length or token usage.
+- `news_input_quality`: the saved assessment of the input coverage.
+
+Missing saved counts remain `"none"`, not zero. Even if the original news record
+is unavailable, saved summary/causal input metrics are retained here; unavailable
+source lists and article counts are then `"none"` rather than inferred.
+
+`summary` contains `event_summary`, `model_name`, `llm_call_status`,
+`summary_prompt_version`, `summary_validation_status` and `token_usage`.
 Only summaries marked `accepted` are exported as text. Other or missing texts
-become `"none"`; missing summaries do not invalidate an otherwise eligible
-coordinate/chain/image intersection.
+become `"none"`, with their saved execution/validation status still visible.
+Missing summaries do not invalidate an otherwise eligible coordinate/chain/image
+intersection.
 
 Causal `steps` retain `n_event`, normalized `type_event`, `description`, and
 `supporting_quote`. Audit counters retain discarded/fuzzy steps, model and
-normalizer/prompt versions where saved. This is reuse of the prior validation,
+normalizer/prompt versions where saved. Summary validation belongs only to the
+`summary` block, not the causal block. This is reuse of the prior validation,
 not a new causal inference or independent verification of causal edges.
 Quotes remain source excerpts even though article bodies and prompts are removed.
 Review source attribution, redistribution terms and quote permissions before
 public release; this exporter does not grant a license or upload data.
+
+### Token accounting
+
+Both model blocks have `token_usage` with `input_tokens`, `output_tokens`,
+`total_tokens`, a method for each count, tokenizer identity/revision when
+available, and a separate `estimates` block. New LLM runs record actual input
+and generated token ids before decoding, including generated special tokens;
+their method is `generated_token_ids`. Export preserves those saved counts.
+Counts apply to the saved call, not the sum of any earlier attempts/reruns.
+
+Historical runs did not record usage. `--recover-tokens` (standalone) or
+`--release-recover-tokens` (main) enables recovery without LLM calls:
+
+- A saved full prompt is formatted with the tokenizer's chat template exactly as the current Reasoner does, then tokenized (`retokenized_saved_prompt`).
+- A saved raw response is tokenized without adding special tokens (`retokenized_saved_response`); cleaned summaries or normalized/pruned causal chains are never substituted.
+- Only tokenizers already in the local Hugging Face cache are loaded, once per model, with remote code disabled; no weights, GPU, inference or downloads are needed.
+- If counts cannot be recovered, character-based estimates use the explicitly reported heuristic `ceil(characters / 4)` in `estimates`, never in the counted token fields.
+
+Retokenization counts the **saved text**, not necessarily the original consumed
+token sequence: decoding removed special tokens and boundary whitespace, and
+historical tokenizer revisions were not recorded. An available tokenizer
+revision is therefore the one used for the recount, not proof of the historical
+version. Recorded counts take precedence over all recounts.
+
+The four-characters assumption is a rough, uncalibrated estimate that varies
+with language, vocabulary and model; it is not measured resource consumption.
+When the full prompt is missing, the input estimate uses `news_total_chars`
+and its `input_scope` explicitly excludes instructions, event metadata and
+the chat template. A saved prompt without an available tokenizer instead gives
+an estimate of that prompt excluding its chat template. Output estimates use
+only the raw response. Estimates are not added to measured/recounted counts to
+produce a false full total. Known skipped calls/dry runs use zero; genuinely
+unrecoverable counts remain `"none"`. Missing tokenizer caches are reported as
+`tokenizer_unavailable` warnings, with character estimates retained when possible.
 
 ## Cluster workflow
 
@@ -210,6 +269,25 @@ The release requires additional disk space comparable to its selected images.
 Repeat the same command to resume an interrupted **identical** export; already
 copied files are hash-checked. Changed inputs, selections or incompatible files
 require a new output directory. Nothing is silently overwritten or cleaned up.
+
+To update an existing v1 package to the v2 JSON schema without duplicating images:
+
+```bash
+python -u src/main.py release --execute --steps release-package \
+  --release-refresh-metadata --release-recover-tokens
+```
+
+The standalone equivalent is `python src/export_final_event_dataset.py --refresh-metadata --recover-tokens`.
+Use the environment/cache previously used for the LLM runs to reuse its tokenizers.
+Use the same input files, selection flags and output directory as the original
+export. Refresh requires an existing managed package, identical input hashes,
+event selection and image inventory. It verifies existing image hashes without
+copying images, then updates JSON, README, manifest and external audit reports.
+It refuses missing/corrupt images and manually changed JSON in a complete package.
+An interrupted refresh is marked incomplete and resumes with the same command.
+No LLM or retrieval jobs are rerun; hash verification can still take time on a
+large image collection.
+
 Do not manually add unrelated images to the managed release folder.
 Temporary copies are staged beside the release directory, on the same
 filesystem, not inside the public image tree. A hard process termination can

@@ -13,16 +13,19 @@ MISSING = "none"
 ID_FIELDS = ("event_id", "DisNo.", "disaster_id", "emdat_disaster_id")
 POSITION_SOURCES = {"em-dat", "ADM/GADM", "llm_nominatim", "llm_nominatim_review_accepted"}
 WEATHER_FIELDS = ("rain_sum", "snowfall_sum", "temperature_2m_max", "temperature_2m_min")
-CAUSAL_NUMBERS = (
-    "news_count", "causal_relevant_news_count", "news_rejected_for_causal_chain",
+NEWS_NUMBERS = (
+    "news_count",
     "selected_news_count", "usable_news_count", "news_sources_count", "news_total_chars",
+)
+CAUSAL_NUMBERS = (
     "causal_chain_dropped_quote_steps", "causal_chain_fuzzy_quote_steps",
     "causal_chain_type_events_changed",
 )
 CAUSAL_TEXT = (
-    "model_name", "llm_call_status", "summary_validation_status", "news_input_quality",
+    "model_name", "llm_call_status",
     "causal_chain_parse_status", "causal_chain_prompt_version", "causal_chain_type_normalizer_version",
 )
+SUMMARY_TEXT = ("model_name", "llm_call_status", "summary_prompt_version", "summary_validation_status")
 
 
 # Recognizes absent scalars without confusing zero and false with missing data.
@@ -178,19 +181,24 @@ def weather_fields(record, start, warnings):
     means = dict(zip(WEATHER_FIELDS, ("mean_daily_rainfall_mm", "mean_daily_snowfall",
                                      "mean_daily_max_temperature_c", "mean_daily_min_temperature_c")))
 
-    def summarize(days):
-        result = {"valid_days": {}}
+    def summarize(days, period):
+        result = {"valid_days": None}
+        counts = {}
         for field, output in means.items():
             values = [day[field] for day in days if day[field] is not None]
-            result["valid_days"][field] = len(values)
+            counts[field] = len(values)
             result[output] = round(sum(values) / len(values), 4) if values else None
+        if len(set(counts.values())) == 1:
+            result["valid_days"] = next(iter(counts.values()))
+        else:
+            warnings.append(f"weather_valid_days_differ:{period}:" + json.dumps(counts, sort_keys=True))
         return result
 
     return {
         "units": {"rain_sum": "mm", "snowfall_sum": snow_unit,
                   "temperature_2m_max": "degC", "temperature_2m_min": "degC"},
-        "pre_event_summary": summarize(rows[:10]),
-        "post_event_summary": summarize(rows[11:]),
+        "pre_event_summary": summarize(rows[:10], "pre_event_summary"),
+        "post_event_summary": summarize(rows[11:], "post_event_summary"),
         "daily_20_days_series": rows,
     }
 
@@ -219,12 +227,32 @@ def source_group(article, news):
     return None, source
 
 
-# Publishes only the saved final articles' URLs and relevance fields, never their text.
-def news_fields(record, warnings):
+# Keeps each model's saved news coverage without merging potentially different inputs.
+def news_input_metrics(row, stage):
+    if not row:
+        return None
+    relevant = "summary_relevant_news_count" if stage == "summary" else "causal_relevant_news_count"
+    rejected = "news_rejected_for_summary" if stage == "summary" else "news_rejected_for_causal_chain"
+    result = {key: number(row.get(key), count=True) for key in NEWS_NUMBERS}
+    result.update(relevant_news_count=number(row.get(relevant), count=True),
+                  rejected_news_count=number(row.get(rejected), count=True),
+                  news_input_quality=row.get("news_input_quality"))
+    return result
+
+
+# Publishes article references and centralizes the news metrics saved by both models.
+def news_fields(record, warnings, *, summary_row=None, causal_row=None):
+    metrics = {"summary_input": news_input_metrics(summary_row, "summary"),
+               "causal_chain_input": news_input_metrics(causal_row, "causal_chain")}
     news = (record or {}).get("news_data")
     if not isinstance(news, dict) or not isinstance(news.get("articles"), list):
         warnings.append("news_unavailable")
-        return None
+        if not summary_row and not causal_row:
+            return None
+        return {"search_metadata": {
+            "global_sources": None, "regional_sources": None, "fallback_sources": None,
+            "total_articles_retrieved": None, "filtered_final_articles": None, **metrics,
+        }}
     deduped = {}
     for article in news["articles"]:
         if not isinstance(article, dict):
@@ -254,7 +282,18 @@ def news_fields(record, warnings):
     metadata = {group: [{"source": name, "article_count": count} for name, count in sorted(values.items())]
                 for group, values in counts.items()}
     metadata.update(total_articles_retrieved=len(output), filtered_final_articles=output)
+    metadata.update(metrics)
     return {"search_metadata": metadata}
+
+
+# Keeps saved token counts distinct from optional text recounts and character estimates.
+def token_usage(row):
+    result = {key: number(row.get(key), count=True) for key in ("input_tokens", "output_tokens", "total_tokens")}
+    for part in ("input", "output", "total"):
+        result[part + "_method"] = (first(row, "token_count_method") or "recorded") if result[part + "_tokens"] is not None else None
+    result.update(tokenizer_name=first(row, "tokenizer_name"), tokenizer_revision=first(row, "tokenizer_revision"),
+                  estimates=None)
+    return result
 
 
 # Retains accepted causal steps and their audit fields through an explicit public allowlist.
@@ -263,13 +302,14 @@ def causal_fields(row):
     chain = payload["causal_chain"] if isinstance(payload, dict) else payload
     result = {key: row.get(key) for key in CAUSAL_TEXT}
     result.update({key: number(row.get(key), count=True) for key in CAUSAL_NUMBERS})
+    result["token_usage"] = token_usage(row)
     result["causal_chain_length"] = len(chain)
     result["steps"] = [{key: step[key] for key in ("n_event", "type_event", "description", "supporting_quote")}
                        for step in chain]
     return result
 
 
-# Exports only the four agreed summary fields without accepting rejected generated text.
+# Keeps the accepted summary and its model execution metadata without news metrics.
 def summary_fields(row, warnings):
     row = row or {}
     accepted = row.get("summary_validation_status") == "accepted"
@@ -277,6 +317,5 @@ def summary_fields(row, warnings):
     if not accepted or missing(text) or text == "INSUFFICIENT_INFORMATION":
         warnings.append("accepted_summary_unavailable")
         text = None
-    return {"usable_news": number(row.get("usable_news_count"), count=True),
-            "total_chars": number(row.get("news_total_chars"), count=True),
-            "news_input_quality": row.get("news_input_quality"), "event_summary": text}
+    return {"event_summary": text, **{key: row.get(key) for key in SUMMARY_TEXT},
+            "token_usage": token_usage(row)}

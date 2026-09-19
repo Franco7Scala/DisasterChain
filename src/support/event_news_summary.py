@@ -1024,6 +1024,7 @@ def summarize_event_from_news(
         event_summary = INSUFFICIENT_INFORMATION
         validation_status = "rejected_unrelated_news_admission"
     return {
+        **getattr(reasoner, "last_token_usage", {}),
         "event_summary": event_summary,
         "summary_raw_response": raw_response,
         "summary_prompt_version": SUMMARY_PROMPT_VERSION,
@@ -1051,6 +1052,7 @@ def extract_causal_chain_from_news(
             else "parsed_with_dropped_unsupported_quotes"
         )
     return {
+        **getattr(reasoner, "last_token_usage", {}),
         "causal_chain": causal_chain,
         "causal_chain_json": json.dumps({"causal_chain": causal_chain}, ensure_ascii=False),
         "causal_chain_length": len(causal_chain),

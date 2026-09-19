@@ -24,9 +24,10 @@ from support.final_dataset_records import (
 )
 from support.final_dataset_satellite import SatelliteRejected, satellite_fields
 from support.satellite_selection import causal_chain_status
+from support.token_accounting import TokenUsageRecovery
 
 
-SCHEMA_VERSION = "environmental-causal-release-v1"
+SCHEMA_VERSION = "environmental-causal-release-v2"
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_OUTPUT_DIR = "results/release"
 
@@ -78,6 +79,7 @@ def compatible_context(record, row, start, *, coordinates=False):
 
 # Builds the requested intersection and an explicit reason for every excluded event.
 def build_export(args, progress=None, *, selection_only=False):
+    token_recovery = TokenUsageRecovery() if args.recover_tokens and not selection_only else None
     paths = {name: project_path(getattr(args, name)) for name in
              ("geocoding_csv", "causal_csv", "weather_json", "news_json", "summary_csv")}
     fingerprints = {}
@@ -150,13 +152,19 @@ def build_export(args, progress=None, *, selection_only=False):
                 record = None
             context[name] = record
         try:
+            causal_output = causal_fields(causal)
+            summary_output = summary_fields(context["summary_csv"], notes)
+            if token_recovery is not None:
+                causal_output["token_usage"] = token_recovery.recover(causal, "causal_chain", notes)
+                summary_output["token_usage"] = token_recovery.recover(context["summary_csv"], "summary", notes)
             output[event_id] = public_values({
                 **event_fields(event_id, row, start),
                 "weather_data": weather_fields(context["weather_json"], start, notes),
                 "satellite_data": satellite,
-                "news_data": news_fields(context["news_json"], notes),
-                "causal_chain": causal_fields(causal),
-                "summary": summary_fields(context["summary_csv"], notes),
+                "news_data": news_fields(context["news_json"], notes,
+                                         summary_row=context["summary_csv"], causal_row=causal),
+                "causal_chain": causal_output,
+                "summary": summary_output,
             })
         except (ValueError, TypeError, KeyError) as exc:
             raise ValueError(f"Invalid context for {event_id}: {exc}") from exc
@@ -199,7 +207,7 @@ def copy_asset(asset, target, expected_hash, staging_dir):
             temporary.unlink(missing_ok=True)
 
 
-# Packages only the selected files and resumes only an identical export plan.
+# Packages selected files or explicitly refreshes metadata while retaining identical images.
 def write_package(args, result):
     output, assets, audit, warnings, paths, fingerprints, manifests = result
     destination = project_path(args.output_dir)
@@ -220,23 +228,44 @@ def write_package(args, result):
                 "dataset_path": "data/dataset.json", "dataset_sha256": hashlib.sha256(dataset).hexdigest(),
                 "input_sha256": fingerprints, "assets": entries}
         manifest_path = destination / "package_manifest.json"
+        refresh = args.refresh_metadata
+        if refresh and not manifest_path.is_file():
+            raise ValueError("Metadata refresh requires an existing managed package")
         if destination.exists() and any(destination.iterdir()):
             if not manifest_path.is_file():
                 raise ValueError("Non-empty unmanaged release directory; choose a new --output-dir")
             previous = read_json(manifest_path)
-            previous.pop("status", None)
+            previous_status = previous.pop("status", None)
             if previous != plan:
-                raise ValueError("Export selection or inputs changed; choose a new --output-dir")
+                metadata_keys = {"schema_version", "dataset_sha256"}
+                unchanged = ({key: value for key, value in previous.items() if key not in metadata_keys}
+                             == {key: value for key, value in plan.items() if key not in metadata_keys})
+                supported = previous.get("schema_version") in {"environmental-causal-release-v1", SCHEMA_VERSION}
+                if not refresh or not unchanged or not supported or previous_status != "complete":
+                    raise ValueError("Export selection or inputs changed; choose a new --output-dir; "
+                                     "--refresh-metadata only updates complete packages with unchanged inputs and images")
+            if refresh and previous_status == "complete":
+                saved_dataset = destination / "data" / "dataset.json"
+                if not saved_dataset.is_file() or file_hash(saved_dataset) != previous["dataset_sha256"]:
+                    raise ValueError("Existing dataset differs from its manifest; metadata refresh refused")
         allowed = {entry["path"] for entry in entries} | {"data/dataset.json", "package_manifest.json", "README.md"}
         for path in destination.rglob("*") if destination.exists() else []:
             if path.is_symlink() or path.is_file() and path.relative_to(destination).as_posix() not in allowed:
                 raise ValueError(f"Unexpected file in release directory: {path}")
+        if refresh and any(not (destination / entry["path"]).is_file() for entry in entries):
+            raise ValueError("Metadata refresh cannot restore missing images; resume the original export first")
         needed = sum(asset.size for asset in assets if not (destination / asset.destination).exists())
-        if shutil.disk_usage(destination.parent).free < needed + len(dataset) + max((asset.size for asset in assets), default=0):
+        temporary_image_size = 0 if refresh else max((asset.size for asset in assets), default=0)
+        if shutil.disk_usage(destination.parent).free < needed + len(dataset) + temporary_image_size:
             raise ValueError("Not enough free disk space to copy the release images")
         atomic_write(manifest_path, json_bytes({**plan, "status": "incomplete"}), destination.parent)
         for index, (asset, entry) in enumerate(zip(assets, entries), start=1):
-            copy_asset(asset, destination / asset.destination, entry["sha256"], destination.parent)
+            target = destination / asset.destination
+            if refresh:
+                if not target.is_file() or target.is_symlink() or file_hash(target) != entry["sha256"]:
+                    raise ValueError(f"Existing asset differs; metadata refresh refused: {target}")
+            else:
+                copy_asset(asset, target, entry["sha256"], destination.parent)
             if index % 100 == 0 or index == len(assets):
                 print(f"Images verified/copied: {index}/{len(assets)}", flush=True)
         for name, path in paths.items():
@@ -274,6 +303,10 @@ def parse_args(argv=None):
     parser.add_argument("--limit", type=int, default=0, help="Limit eligible events, not scanned input rows; 0 means all")
     parser.add_argument("--require-complete", action="store_true", help="Exclude partial collections even if images exist")
     parser.add_argument("--allow-missing-context", action="store_true", help="Explicitly allow missing weather/news/summary files")
+    parser.add_argument("--refresh-metadata", action="store_true",
+                        help="Update JSON and documentation in an existing package with unchanged inputs and images")
+    parser.add_argument("--recover-tokens", action="store_true",
+                        help="Recount saved text with cached tokenizers and report separate character estimates when needed")
     parser.add_argument("--dry-run", action="store_true", help="Check the real inputs without writing or copying files")
     args = parser.parse_args(argv)
     if args.limit < 0:

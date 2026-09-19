@@ -700,6 +700,10 @@ def build_steps(args: argparse.Namespace) -> List[PipelineStep]:
         package_command.append("--require-complete")
     if args.release_allow_missing_context:
         package_command.append("--allow-missing-context")
+    if args.release_refresh_metadata:
+        package_command.append("--refresh-metadata")
+    if args.release_recover_tokens:
+        package_command.append("--recover-tokens")
     steps.append(
         PipelineStep(
             name="release-package",
@@ -969,6 +973,10 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--release-event-id", action="append")
     parser.add_argument("--release-require-complete", action="store_true")
     parser.add_argument("--release-allow-missing-context", action="store_true")
+    parser.add_argument("--release-refresh-metadata", action="store_true",
+                        help="Refresh an existing public package without copying its unchanged images")
+    parser.add_argument("--release-recover-tokens", action="store_true",
+                        help="Recover saved-text token counts without loading models or making LLM calls")
     parser.add_argument(
         "--final-complete-summary-csv",
         default=DEFAULT_FINAL_COMPLETE_SUMMARY_CSV,
