@@ -1,4 +1,7 @@
-# DisasterChain: a multimodal dataset linking Earth observation, meteorology and structured disaster narratives
+# DisasterChain: a multimodal global disaster dataset linking Earth observation, meteorology and structured narratives
+
+[![License: GPL v3](https://img.shields.io/badge/License-GPLv3-blue.svg)](https://www.gnu.org/licenses/gpl-3.0)
+[![Version](https://img.shields.io/badge/pypi-1.0.0-orange.svg)](https://pypi.org/project/floppy-tracker/)
 
 Build a multimodal disaster dataset from raw EM-DAT and GDIS files using a single
 entry point: `python src/main.py release`. The pipeline merges the source data,
@@ -599,3 +602,13 @@ model/prompt identifiers and `python -m pip freeze` output with your experiment
 records. Dependencies are not pinned and external sources can change, so running
 the workflow later does not guarantee identical event counts or byte-for-byte
 results.
+
+## ✍️ Authors & Citation
+
+**Francesco Scala, Liliana Martirano, Saverio Polito, Domenico Mandaglio and Luigi Pontieri.** *Institute of High Performance Computing and Networking (ICAR-CNR), Italy.*
+
+If you use DisasterChain in your research, please cite:
+
+ ```
+   Coming soon...
+ ```
