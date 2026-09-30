@@ -1,4 +1,4 @@
-# EnvironmentCausalDataset
+# DisasterChain: a multimodal dataset linking Earth observation, meteorology and structured disaster narratives
 
 Build a multimodal disaster dataset from raw EM-DAT and GDIS files using a single
 entry point: `python src/main.py release`. The pipeline merges the source data,
