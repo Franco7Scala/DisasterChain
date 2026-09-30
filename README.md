@@ -2,6 +2,7 @@
 
 [![License: GPL v3](https://img.shields.io/badge/License-GPLv3-blue.svg)](https://www.gnu.org/licenses/gpl-3.0)
 [![Version](https://img.shields.io/badge/version-1.0.0-orange.svg)](https://huggingface.co/datasets/Franco7Scala/DisasterChain)
+[![Paper](https://img.shields.io/badge/Paper-Scientific_Data-brightgreen.svg)](TODO)
 
 Build a multimodal disaster dataset from raw EM-DAT and GDIS files using a single
 entry point: `python src/main.py release`. The pipeline merges the source data,
