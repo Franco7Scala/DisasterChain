@@ -1,7 +1,7 @@
 # DisasterChain: a multimodal global disaster dataset linking Earth observation, meteorology and structured narratives
 
 [![License: GPL v3](https://img.shields.io/badge/License-GPLv3-blue.svg)](https://www.gnu.org/licenses/gpl-3.0)
-[![Version](https://img.shields.io/badge/pypi-1.0.0-orange.svg)](https://pypi.org/project/floppy-tracker/)
+[![Version](https://img.shields.io/badge/version-1.0.0-orange.svg)](https://huggingface.co/datasets/Franco7Scala/DisasterChain)
 
 Build a multimodal disaster dataset from raw EM-DAT and GDIS files using a single
 entry point: `python src/main.py release`. The pipeline merges the source data,
