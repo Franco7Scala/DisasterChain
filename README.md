@@ -1,6 +1,6 @@
 # DisasterChain: a multimodal global disaster dataset linking Earth observation, meteorology and structured narratives
 
-[![Paper](https://img.shields.io/badge/Paper-Scientific_Data-brightgreen.svg)](TODO)
+[![Paper](https://img.shields.io/badge/Paper-UNDER_REVIEW-brightgreen.svg)](TODO)
 [![License: GPL v3](https://img.shields.io/badge/License-GPLv3-blue.svg)](https://www.gnu.org/licenses/gpl-3.0)
 [![Version](https://img.shields.io/badge/version-1.0.0-orange.svg)](https://huggingface.co/datasets/Franco7Scala/DisasterChain)
 
